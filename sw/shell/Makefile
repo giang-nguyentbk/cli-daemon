@@ -12,7 +12,7 @@ $(BIN)/$(TARGET): shell.c
 	@$(CC) $(CFLAGS) -o $@ $<
 
 run:
-	$(BIN)/$(TARGET)
+	@$(BIN)/$(TARGET)
 
 val:
 	sudo valgrind --leak-check=yes --leak-check=full --show-leak-kinds=all $(BIN)/$(TARGET)
