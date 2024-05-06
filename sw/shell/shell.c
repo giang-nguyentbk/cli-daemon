@@ -37,7 +37,20 @@ struct remote_host_info {
 	int		alive_timer_fd;
 };
 
-#define NUM_INTERNAL_CMDS	5
+struct history_cmd {
+	struct history_cmd	*next;
+	struct history_cmd	*prev;
+
+	char			cmd[256];
+};
+
+struct history_cmd_queue {
+	struct history_cmd	*head;
+	struct history_cmd	*tail;
+};
+
+#define NUM_INTERNAL_CMDS	6
+#define MAX_HISTORY_CMDS	50
 #define UDP_BROADCAST_PORT	11111
 #define TCP_CLID_PORT		33333
 #define MAX_NUM_REMOTE_HOSTS	255
@@ -72,6 +85,8 @@ static pthread_mutex_t m_remote_hosts_mtx;
 static pthread_t m_udp_thread_id;
 static pthread_mutex_t m_udp_thread_mtx;
 static void *m_remote_host_tree;
+static struct history_cmd_queue m_hist_cmd_queue;
+static uint16_t m_num_hist_cmd = 0;
 
 
 
@@ -95,9 +110,12 @@ static bool restart_alive_timer(int timer_fd);
 static int compare_hostname_remotehost_tree(const void *pa, const void *pb);
 static int compare_host_remotehost_tree(const void *pa, const void *pb);
 static bool handle_receive_broadcast_msg(int sockfd);
+static void add_new_cmd_to_history_queue(char *cmd);
+static void destroy_history_queue(struct history_cmd_queue *hist_queue);
 
 static bool local_help(char **args);
 static bool local_exit(char **args);
+static bool local_history(char **args);
 static bool local_scan(char **args);
 static bool local_connect(char **args);
 static bool local_disconnect(char **args);
@@ -118,6 +136,9 @@ int main(int argc, char* argv[])
 		printf("Failed to set local shell commands!\n");
 		exit(EXIT_FAILURE);
 	}
+
+	m_hist_cmd_queue.head = NULL;
+	m_hist_cmd_queue.tail = NULL;
 
 	// while((opt = getopt(argc, argv, "ip:")) != -1)
 	// {
@@ -211,6 +232,7 @@ int main(int argc, char* argv[])
 		}
 	}
 
+	destroy_history_queue(&m_hist_cmd_queue);
 	exit(EXIT_SUCCESS);
 }
 
@@ -246,6 +268,11 @@ static bool read_input_cmd(char *buff)
 			buff[--m_buff_len] = '\0';
 		}
 		// printf("You entered %d characters: \"%s\"\n", m_buff_len, buff);
+
+		if(m_buff_len > 0)
+		{
+			add_new_cmd_to_history_queue(buff);
+		}
 	}
 	else
 	{
@@ -277,33 +304,81 @@ static int get_token(const char *str, char *token)
 	}
 
 	// Found new token
-	bool is_negative = false;
+	bool start_with_one_minus = false;
+	bool start_with_two_minus = false;
+	bool start_with_int = false;
+	bool is_single_flag = false;
 	int i = 0;
 	while(*str && !strchr(" \t", *str))
 	{
 		if(*str == '-')
 		{
+			/* Token as a flag or negative interger, for example, -D, -a, -f, -99, -22,... */
 			if(i == 0)
 			{
-				is_negative = true;
+				start_with_one_minus = true;
 				token[i] = *str++;
 				i++;
 				nr_chars++;
-			} else
-			{
-				printf("Invalid argurment, found '-' in the middle of argument!\n");
-				free(token);
-				return 0;
+				continue;
 			}
-		}
 
-		if((*str >= '0' && *str <= '9') || (*str >= 'a' && *str <= 'z') || (*str >= 'A' && *str <= 'Z'))
-		{
-			if(is_negative && (*str < '0' || *str > '9'))
+			/* Token as a complete flag, for example, --daemon, --unittest,... */
+			if(start_with_one_minus && i == 1)
 			{
-				printf("Invalid argurment, negative numeric argument but found alphabet character!\n");
+				start_with_one_minus = false;
+				start_with_two_minus = true;
+				token[i] = *str++;
+				i++;
+				nr_chars++;
+				continue;
+			}		
+
+			/* Token as a complete word-concatenated flag, for example, --add-missing, --frequency-overlap,... */
+			/* If there were a token starting with two minus, not allowed to have 3nd minus right then */
+			if(start_with_two_minus && i != 2)
+			{
+				token[i] = *str++;
+				i++;
+				nr_chars++;
+				continue;
+			}
+
+			printf("Invalid argurment with '-'!\n");
+			free(token);
+			return -1;
+		} else if((*str >= '0' && *str <= '9'))
+		{
+			/* If there were a token starting with two minus, not allowed to have digit right after the two minus */
+			/* Or if there were a token starting with one minus, but not negative interger (instead, it's a single flag like -D, -a, -v,...), no more than two characters accepted */
+			if((start_with_two_minus && i == 2) || (start_with_one_minus && is_single_flag))
+			{
+				printf("Invalid argurment with digits!\n");
 				free(token);
-				return 0;
+				return -1;
+			}
+
+			/* If there were a token starting with a digit, not allowed to have '-' or alphabets right then */
+			if(i == 0)
+			{
+				start_with_int = true;
+			}
+
+			token[i] = *str++;
+			i++;
+			nr_chars++;
+		} else if((*str >= 'a' && *str <= 'z') || (*str >= 'A' && *str <= 'Z')) 
+		{
+			/* Or if there were a token starting with one minus, but not negative interger (instead, it's a single flag like -D, -a, -v,...), no more than two characters accepted */
+			/* Or if there were a token starting with a digit, not allowed to have alphabets right then */
+			if((start_with_one_minus && i != 1) || (start_with_int))
+			{
+				printf("Invalid argurment with alphabets!\n");
+				free(token);
+				return -1;
+			} else if(start_with_one_minus && i == 1)
+			{
+				is_single_flag = true;
 			}
 
 			token[i] = *str++;
@@ -311,9 +386,10 @@ static int get_token(const char *str, char *token)
 			nr_chars++;
 		} else
 		{
+			/* Any characters except for 0-9, a-z, A-Z and '-' are not allowed */
 			printf("Invalid argurment, unknown character: '%c'\n", *str);
 			free(token);
-			return 0;
+			return -1;
 		}
 	}
 
@@ -338,10 +414,21 @@ static int get_args(char *cmd, char *args[])
 	while((nr_chars = get_token(cmd, token)) > 0)
 	{
 		args[i] = token;
-		// printf("Token %d: \"%s\"\n", i, token);
+		printf("Token %d: \"%s\"\n", i, token);
 		token = malloc(32);
 		cmd += nr_chars;
 		i++;
+	}
+
+	if(nr_chars == -1)
+	{
+		/* If any invalid argument, must free the previous valid ones */
+		for(int j = 0; j < i; j++)
+		{
+			free(args[j]);
+			args[j] = NULL;
+		}
+		return 0;
 	}
 
 	return i;
@@ -386,20 +473,25 @@ static bool setup_local_cmds(void)
 	strcpy(m_local_cmds[1].description, "Disconnect from remote device and exit current shell.");
 	strcpy(m_local_cmds[1].syntax, "exit");
 
-	strcpy(m_local_cmds[2].cmd, "scan");
-	m_local_cmds[2].handler = &local_scan;
-	strcpy(m_local_cmds[2].description, "Scan remote devices being active.");
-	strcpy(m_local_cmds[2].syntax, "scan");
+	strcpy(m_local_cmds[2].cmd, "history");
+	m_local_cmds[2].handler = &local_history;
+	strcpy(m_local_cmds[2].description, "List all history commands in current shell session.");
+	strcpy(m_local_cmds[2].syntax, "history");
+
+	strcpy(m_local_cmds[3].cmd, "scan");
+	m_local_cmds[3].handler = &local_scan;
+	strcpy(m_local_cmds[3].description, "Scan remote devices being active.");
+	strcpy(m_local_cmds[3].syntax, "scan");
 	
-	strcpy(m_local_cmds[3].cmd, "connect");
-	m_local_cmds[3].handler = &local_connect;
-	strcpy(m_local_cmds[3].description, "Connect to remote device via ip address and port or index returned by scan.");
-	strcpy(m_local_cmds[3].syntax, "connect { <ip> <port> | <index> }");
+	strcpy(m_local_cmds[4].cmd, "connect");
+	m_local_cmds[4].handler = &local_connect;
+	strcpy(m_local_cmds[4].description, "Connect to remote device via ip address and port or index returned by scan.");
+	strcpy(m_local_cmds[4].syntax, "connect { -m <ip> | -a <index> }");
 	
-	strcpy(m_local_cmds[4].cmd, "disconnect");
-	m_local_cmds[4].handler = &local_disconnect;
-	strcpy(m_local_cmds[4].description, "Disconnect from an already connected remote device.");
-	strcpy(m_local_cmds[4].syntax, "disconnect");
+	strcpy(m_local_cmds[5].cmd, "disconnect");
+	m_local_cmds[5].handler = &local_disconnect;
+	strcpy(m_local_cmds[5].description, "Disconnect from an already connected remote device.");
+	strcpy(m_local_cmds[5].syntax, "disconnect");
 
 	return true;
 }
@@ -438,10 +530,42 @@ static bool local_help(char **args)
 static bool local_exit(char **args)
 {
 	(void)args;
+
+	if(m_nr_args > 1)
+	{
+		printf("exit: Too many arguments!\n\n");
+		return false;
+	}
+
 	printf("exit: calling this command!\n");
 
 	printf("\n");
 	m_is_exit = true;
+	return true;
+}
+
+static bool local_history(char **args)
+{
+	(void)args;
+
+	if(m_nr_args > 1)
+	{
+		printf("history: Too many arguments!\n\n");
+		return false;
+	}
+
+	printf("%-3s %-128s\n", "Index", "Command");
+	printf("%-3s %-128s\n", "-----", "-------");
+	struct history_cmd *iter = m_hist_cmd_queue.head;
+	for(int i = 0; i < m_num_hist_cmd; i++)
+	{
+		char index[5];
+		sprintf(index, "%d", i);
+		printf("%-5s %-128s\n", index, iter->cmd);
+		iter = iter->next;
+	}
+	printf("\n");
+
 	return true;
 }
 
@@ -478,6 +602,26 @@ static bool local_scan(char **args)
 static bool local_connect(char **args)
 {
 	(void)args;
+	// if(m_nr_args > 2)
+	// {
+	// 	printf("scan: Too many arguments!\n\n");
+	// 	return false;
+	// }
+
+	// switch (m_nr_args)
+	// {
+	// case 1:
+	// 	/* Connect via scan table's index */
+	// 	break;
+	
+	// case 2:
+	// 	/* Connect via manually inserted ip address and port */
+	// 	break;
+	
+	// default:
+	// 	break;
+	// }
+
 	printf("connect: calling this command!\n");
 	printf("\n");
 	m_is_connected = true;
@@ -766,9 +910,53 @@ static int compare_host_remotehost_tree(const void *pa, const void *pb)
 	return strcmp(peer_a->hostname, peer_b->hostname);
 }
 
+static void add_new_cmd_to_history_queue(char *cmd)
+{
+	struct history_cmd *new_cmd = (struct history_cmd *)malloc(sizeof(struct history_cmd));
+	new_cmd->next = NULL;
+	strcpy(new_cmd->cmd, cmd);
 
+	/* Have not had any history command yet */
+	if(m_num_hist_cmd == 0)
+	{
+		new_cmd->prev = NULL;
+		m_hist_cmd_queue.head = new_cmd;
+		m_hist_cmd_queue.tail = new_cmd;
+		m_num_hist_cmd++;
+	} else if(m_num_hist_cmd == MAX_HISTORY_CMDS)
+	{
+		/* Pop the first element from the queue to have slot for new cmd */
+		m_hist_cmd_queue.head = m_hist_cmd_queue.head->next;
+		free(m_hist_cmd_queue.head->prev);
 
+		m_hist_cmd_queue.tail->next = new_cmd;
+		new_cmd->prev = m_hist_cmd_queue.tail;
+		m_hist_cmd_queue.tail = new_cmd;
+	} else
+	{
+		m_hist_cmd_queue.tail->next = new_cmd;
+		new_cmd->prev = m_hist_cmd_queue.tail;
+		m_hist_cmd_queue.tail = new_cmd;
+		m_num_hist_cmd++;
+	}
+}
 
+static void destroy_history_queue(struct history_cmd_queue *hist_queue)
+{
+	if(hist_queue == NULL)
+	{
+		printf("Failed to destroy_history_queue due to history queue is NULL!\n");
+		return;
+	}
+
+	struct history_cmd *iter = hist_queue->head;
+	for(;iter != NULL;)
+	{
+		struct history_cmd *tmp = iter->next;
+		free(iter);
+		iter = tmp;
+	}
+}
 
 
 
