@@ -112,6 +112,7 @@ static int compare_host_remotehost_tree(const void *pa, const void *pb);
 static bool handle_receive_broadcast_msg(int sockfd);
 static void add_new_cmd_to_history_queue(char *cmd);
 static void destroy_history_queue(struct history_cmd_queue *hist_queue);
+static bool connect_to_remote_host_via_index(int index);
 
 static bool local_help(char **args);
 static bool local_exit(char **args);
@@ -139,50 +140,6 @@ int main(int argc, char* argv[])
 
 	m_hist_cmd_queue.head = NULL;
 	m_hist_cmd_queue.tail = NULL;
-
-	// while((opt = getopt(argc, argv, "ip:")) != -1)
-	// {
-	// 	switch (opt)
-	// 	{
-	// 	case 'i':
-	// 		strcpy(tcp_ip, optarg);
-	// 		break;
-		
-	// 	case 'p':
-	// 		port = atoi(optarg);
-	// 		break;
-	// 	default:
-	// 		printf("ERROR: Usage:\t%s\t[-i ip_address]\t[-p port]\n", argv[0]);
-	// 		printf("Example:\t%s\t-i   \"192.168.1.2\"\t-p   33333\n", argv[0]);
-	// 		exit(EXIT_FAILURE);
-	// 		break;
-	// 	}
-	// }
-
-	// printf ("Connecting to device...\n");
-
-	// int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-	// if(sockfd < 0)
-	// {
-	// 	printf("Failed to get socket(), errno = %d!", errno);
-	// 	return false;
-	// }
-
-	// struct sockaddr_in serveraddr;
-	// memset(&serveraddr, 0, sizeof(struct sockaddr_in));
-	// serveraddr.sin_family = AF_INET;
-	// serveraddr.sin_addr.s_addr = inet_addr(tcp_ip);
-	// serveraddr.sin_port = htons(port);
-
-	// int res = connect(sockfd, (struct sockaddr *)((void *)&serveraddr), sizeof(struct sockaddr_in));
-	// if(res < 0)
-	// {
-	// 	printf("Failed to get connect(), errno = %d!", errno);
-	// 	close(sockfd);
-	// 	return false;
-	// }
-
-	// printf ("Connected to device: tcp://%s:%d\n", tcp_ip, port);
 
 	setup_udp_server();
 	setup_udp_thread();
@@ -269,7 +226,7 @@ static bool read_input_cmd(char *buff)
 		}
 		// printf("You entered %d characters: \"%s\"\n", m_buff_len, buff);
 
-		if(m_buff_len > 0)
+		if(m_buff_len > 0) 
 		{
 			add_new_cmd_to_history_queue(buff);
 		}
@@ -335,7 +292,7 @@ static int get_token(const char *str, char *token)
 			}		
 
 			/* Token as a complete word-concatenated flag, for example, --add-missing, --frequency-overlap,... */
-			/* If there were a token starting with two minus, not allowed to have 3nd minus right then */
+			/* If there were a token starting with two minus, not allowed to have the 3rd minus right then */
 			if(start_with_two_minus && i != 2)
 			{
 				token[i] = *str++;
@@ -414,7 +371,7 @@ static int get_args(char *cmd, char *args[])
 	while((nr_chars = get_token(cmd, token)) > 0)
 	{
 		args[i] = token;
-		printf("Token %d: \"%s\"\n", i, token);
+		// printf("Token %d: \"%s\"\n", i, token);
 		token = malloc(32);
 		cmd += nr_chars;
 		i++;
@@ -485,8 +442,8 @@ static bool setup_local_cmds(void)
 	
 	strcpy(m_local_cmds[4].cmd, "connect");
 	m_local_cmds[4].handler = &local_connect;
-	strcpy(m_local_cmds[4].description, "Connect to remote device via ip address and port or index returned by scan.");
-	strcpy(m_local_cmds[4].syntax, "connect { -m <ip> | -a <index> }");
+	strcpy(m_local_cmds[4].description, "Connect to remote device via an index returned by scan command.");
+	strcpy(m_local_cmds[4].syntax, "connect <index>");
 	
 	strcpy(m_local_cmds[5].cmd, "disconnect");
 	m_local_cmds[5].handler = &local_disconnect;
@@ -588,7 +545,7 @@ static bool local_scan(char **args)
 		{
 			char index[5];
 			char port[7];
-			sprintf(index, "%d", i);
+			sprintf(index, "%d", i + 1);
 			sprintf(port, "%hu", TCP_CLID_PORT);
 			printf("%-10s %-32s %-25s %-7s\n", index, m_remote_hosts[i].hostname, m_remote_hosts[i].ip, port);
 		}
@@ -601,28 +558,28 @@ static bool local_scan(char **args)
 
 static bool local_connect(char **args)
 {
-	(void)args;
-	// if(m_nr_args > 2)
-	// {
-	// 	printf("scan: Too many arguments!\n\n");
-	// 	return false;
-	// }
-
-	// switch (m_nr_args)
-	// {
-	// case 1:
-	// 	/* Connect via scan table's index */
-	// 	break;
+	// (void)args;
 	
-	// case 2:
-	// 	/* Connect via manually inserted ip address and port */
-	// 	break;
-	
-	// default:
-	// 	break;
-	// }
+	if(m_nr_args != 2)
+	{
+		printf("scan: Too few or many arguments!\n\n");
+		return false;
+	}
 
-	printf("connect: calling this command!\n");
+	int index = atoi(args[1]);
+
+	if(index != 0)
+	{
+		if(!connect_to_remote_host_via_index(index - 1)) // Index counted from 1
+		{
+			return false;
+		}
+	} else
+	{
+		printf("scan: Unknown argument %s!\n\n", args[1]);
+		return false;
+	}
+
 	printf("\n");
 	m_is_connected = true;
 	return true;
@@ -958,6 +915,44 @@ static void destroy_history_queue(struct history_cmd_queue *hist_queue)
 	}
 }
 
+static bool connect_to_remote_host_via_index(int index)
+{
+	if(index < 0 || index > MAX_NUM_REMOTE_HOSTS - 1)
+	{
+		printf("Index %d out of range!\n", index);
+		return false;
+	} else if(strcmp(m_remote_hosts[index].ip, "0.0.0.0") == 0)
+	{
+		printf("Remote host for index %d not found in scan table!\n", index);
+		return false;
+	}
 
+	printf ("Connecting to device...\n");
+
+	int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+	if(sockfd < 0)
+	{
+		printf("Failed to get socket(), errno = %d!\n", errno);
+		return false;
+	}
+
+	struct sockaddr_in serveraddr;
+	memset(&serveraddr, 0, sizeof(struct sockaddr_in));
+	serveraddr.sin_family = AF_INET;
+	serveraddr.sin_addr.s_addr = inet_addr(m_remote_hosts[index].ip);
+	serveraddr.sin_port = htons(TCP_CLID_PORT);
+
+	int res = connect(sockfd, (struct sockaddr *)((void *)&serveraddr), sizeof(struct sockaddr_in));
+	if(res < 0)
+	{
+		printf("Failed to get connect(), errno = %d!\n", errno);
+		close(sockfd);
+		return false;
+	}
+
+	strcpy(m_remote_ip, m_remote_hosts[index].ip);
+	printf ("Connected to device: tcp://%s:%d\n", m_remote_hosts[index].ip, TCP_CLID_PORT);
+	return true;
+}
 
 

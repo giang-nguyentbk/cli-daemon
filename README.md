@@ -11,3 +11,32 @@ This project is divided into 3 parts:
 
 
 ```
+
+# How to test
+
+```bash
+# Run itccoord
+$ Open 1st terminal
+$ ws
+$ cd itc-framework/sw/itc/unitTest/itc-main/test-itcgws
+$ make rcp
+
+# Run itcgws
+$ Open 2nd terminal
+$ ws
+$ cd itc-framework/sw/itc/unitTest/itc-main/test-itcgws
+$ make r2
+
+# Run clid
+$ Open 3rd terminal
+$ ws
+$ cd cli-daemon/sw/clid
+$ make run
+
+# Run shell
+$ Open 4th terminal
+$ ws
+$ cd cli-daemon/sw/shell
+$ make run
+
+```
