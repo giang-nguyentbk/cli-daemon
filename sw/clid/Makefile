@@ -6,7 +6,7 @@ CFLAGS = -g -Wall -Werror -Wextra
 CC = gcc
 
 INC_PATHS	:= \
-		-I$(ROOT_DIR)/sw/common/traceUtils/if
+		-I$(ROOT_DIR)/sw/common/if
 
 all: $(BIN)/$(TARGET)
 

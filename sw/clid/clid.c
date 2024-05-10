@@ -13,9 +13,11 @@
 #include <search.h>
 #include <sys/ioctl.h>
 #include <net/if.h>
+#include <stddef.h>
 
 // #include <itc.h>
 #include "traceUtils.h"
+#include "tcp_proto.h"
 
 /*****************************************************************************\/
 *****                          INTERNAL TYPES                              *****
@@ -24,13 +26,35 @@
 #define MIN_OF(a, b)		(a) < (b) ? (a) : (b)
 #define TCP_CLID_PORT		33333
 #define MAX_NUM_SHELL_CLIENTS	255
+#define MAX_NUM_CMDS		255
+#define MAX_SUB_CMD_NAME_LENGTH	255
+#define MAX_CMD_NAME_LENGTH	32
+#define MAX_NUM_SUB_CMDS	64
 #define NET_INTERFACE_ETH0	"eth0"
 #define CLID_LOG_FILENAME	"clid.log"
 
 
+struct shell_client {
+	int		fd;
+
+};
+
+struct sub_command {
+	char		sub_cmd[MAX_SUB_CMD_NAME_LENGTH];
+};
+
+struct command {
+	char			cmd_name[MAX_CMD_NAME_LENGTH];
+	struct sub_command	sub_cmds[MAX_NUM_SUB_CMDS];
+};
+
 struct clid_instance {
 	int					tcp_fd;
 	struct sockaddr_in			tcp_addr;
+	struct shell_client			clients[MAX_NUM_SHELL_CLIENTS];
+	void					*client_tree;
+	struct command				cmds[MAX_NUM_CMDS];
+	void					*cmd_tree;
 	// int					mbox_fd;
 	// itc_mbox_id_t				mbox_id;
 	// s
@@ -55,6 +79,16 @@ static bool setup_log_file(void);
 static bool setup_tcp_server(void);
 static struct in_addr get_ip_address_from_network_interface(int sockfd, char *interface);
 static bool handle_accept_new_connection(int sockfd);
+static int compare_fd_in_client_tree(const void *pa, const void *pb);
+static int compare_client_in_client_tree(const void *pa, const void *pb);
+static bool setup_shell_clients(void);
+static bool setup_command_list(void);
+static bool handle_receive_tcp_packet(int sockfd);
+static int recv_data(int sockfd, void *rx_buff, int nr_bytes_to_read);
+static bool release_shell_client_resources(int sockfd);
+static bool handle_receive_get_list_cmd_request(int sockfd, struct ethtcp_header *header);
+static void do_nothing(void *tree_node_data);
+static bool send_get_list_cmd_reply(int sockfd);
 
 
 
@@ -110,7 +144,7 @@ int main(int argc, char* argv[])
 	// At normal termination we just clean up our resources by registration a exit_handler
 	atexit(clid_exit_handler);
 
-	if(!setup_tcp_server())
+	if(!setup_tcp_server() || !setup_shell_clients() || !setup_command_list())
 	{
 		LOG_ERROR("Failed to setup clid daemon!");
 		exit(EXIT_FAILURE);
@@ -125,6 +159,15 @@ int main(int argc, char* argv[])
 		FD_SET(clid_inst.tcp_fd, &fdset);
 		max_fd = MAX_OF(clid_inst.tcp_fd, max_fd);
 
+		for(int i = 0; i < MAX_NUM_SHELL_CLIENTS; i++)
+		{
+			if(clid_inst.clients[i].fd != -1)
+			{
+				FD_SET(clid_inst.clients[i].fd, &fdset);
+				max_fd = MAX_OF(clid_inst.clients[i].fd, max_fd);
+			}
+		}
+
 		res = select(max_fd + 1, &fdset, NULL, NULL, NULL);
 		if(res < 0)
 		{
@@ -138,6 +181,18 @@ int main(int argc, char* argv[])
 			{
 				LOG_ERROR("Failed to handle_accept_new_connection()!");
 				exit(EXIT_FAILURE);
+			}
+		}
+
+		for(int i = 0; i < MAX_NUM_SHELL_CLIENTS; i++)
+		{
+			if(clid_inst.clients[i].fd != -1 && FD_ISSET(clid_inst.clients[i].fd, &fdset))
+			{
+				if(handle_receive_tcp_packet(clid_inst.clients[i].fd) == false)
+				{
+					LOG_ERROR("Failed to handle_accept_new_connection()!");
+					exit(EXIT_FAILURE);
+				}
 			}
 		}
 	}
@@ -179,6 +234,7 @@ static void clid_exit_handler(void)
 	LOG_INFO("CLID is terminated, calling exit handler...");
 
 	close(clid_inst.tcp_fd);
+	tdestroy(clid_inst.client_tree, do_nothing);
 	
 	LOG_INFO("CLID exit handler finished!");
 }
@@ -202,15 +258,15 @@ static bool setup_log_file(void)
 
 // static bool setup_mailbox(void)
 // {
-// 	clid_inst.tcp_server_mbox_id = itc_create_mailbox(ITC_GATEWAY_MBOX_TCP_SER_NAME2, ITC_NO_NAMESPACE); // TEST ONLY
-// 	if(clid_inst.tcp_server_mbox_id == ITC_NO_MBOX_ID)
+// 	clid_inst.tcp_server_mbox_id = itc_create_mailbox(LOG_GATEWAY_MBOX_TCP_SER_NAME2, LOG_NO_NAMESPACE); // TEST ONLY
+// 	if(clid_inst.tcp_server_mbox_id == LOG_NO_MBOX_ID)
 // 	{
-// 		LOG_ERROR("Failed to create mailbox %s", ITC_GATEWAY_MBOX_TCP_SER_NAME2); // TEST ONLY
+// 		LOG_ERROR("Failed to create mailbox %s", LOG_GATEWAY_MBOX_TCP_SER_NAME2); // TEST ONLY
 // 		return false;
 // 	}
 
 // 	clid_inst.tcp_server_mbox_fd = itc_get_fd(clid_inst.tcp_server_mbox_id);
-// 	LOG_INFO("Create TCP server mailbox \"%s\" successfully!", ITC_GATEWAY_MBOX_TCP_SER_NAME2); // TEST ONLY
+// 	LOG_INFO("Create TCP server mailbox \"%s\" successfully!", LOG_GATEWAY_MBOX_TCP_SER_NAME2); // TEST ONLY
 // 	return true;
 // }
 
@@ -305,8 +361,313 @@ static bool handle_accept_new_connection(int sockfd)
 	}
 
 	LOG_INFO("Receiving new connection from a peer client tcp://%s:%hu/", inet_ntoa(new_addr.sin_addr), ntohs(new_addr.sin_port));
+
+	struct shell_client **iter;
+	iter = tfind(&new_fd, &clid_inst.client_tree, compare_fd_in_client_tree);
+	if(iter != NULL)
+	{
+		/* Already added in tree */
+		LOG_ABN("This fd %d already connected, something wrong!", new_fd);
+		return false;
+	} else
+	{
+		int i = 0;
+		for(; i < MAX_NUM_SHELL_CLIENTS; i++)
+		{
+			if(clid_inst.clients[i].fd == -1)
+			{
+				clid_inst.clients[i].fd = new_fd;
+				tsearch(&clid_inst.clients[i], &clid_inst.client_tree, compare_client_in_client_tree);
+				break;
+			}
+		}
+
+		if(i == MAX_NUM_SHELL_CLIENTS)
+		{
+			LOG_ERROR("No more than %d shell client is accepted!", MAX_NUM_SHELL_CLIENTS);
+			return false;
+		}
+	}
+
 	return true;
 }
+
+static int compare_fd_in_client_tree(const void *pa, const void *pb)
+{
+	const int *fd = pa;
+	const struct shell_client *client = pb;
+
+	if(*fd == client->fd)
+	{
+		return 0;
+	} else if(*fd > client->fd)
+	{
+		return 1;
+	} else
+	{
+		return -1;
+	}
+}
+
+static int compare_client_in_client_tree(const void *pa, const void *pb)
+{
+	const struct shell_client *client_a = pa;
+	const struct shell_client *client_b = pb;
+	
+	if(client_a->fd == client_b->fd)
+	{
+		return 0;
+	} else if(client_a->fd > client_b->fd)
+	{
+		return 1;
+	} else
+	{
+		return -1;
+	}
+}
+
+static bool setup_shell_clients(void)
+{
+	for(int i = 0; i < MAX_NUM_SHELL_CLIENTS; i++)
+	{
+		clid_inst.clients[i].fd = -1;
+	}
+
+	return true;
+}
+
+static bool setup_command_list(void)
+{
+	strcpy(clid_inst.cmds[0].cmd_name, "aclocal");
+	strcpy(clid_inst.cmds[0].sub_cmds[0].sub_cmd, "aclocal 1 2 3");
+	strcpy(clid_inst.cmds[0].sub_cmds[1].sub_cmd, "aclocal a b c");
+	for(int i = 2 ; i < MAX_NUM_SUB_CMDS; i++)
+	{
+		clid_inst.cmds[0].sub_cmds[i].sub_cmd[0] = '\0';
+	}
+
+	strcpy(clid_inst.cmds[1].cmd_name, "acreconf");
+	strcpy(clid_inst.cmds[1].sub_cmds[0].sub_cmd, "acreconf 1 2 3");
+	strcpy(clid_inst.cmds[1].sub_cmds[1].sub_cmd, "acreconf a b c");
+	for(int i = 2 ; i < MAX_NUM_SUB_CMDS; i++)
+	{
+		clid_inst.cmds[1].sub_cmds[i].sub_cmd[0] = '\0';
+	}
+
+	strcpy(clid_inst.cmds[2].cmd_name, "aclog");
+	strcpy(clid_inst.cmds[2].sub_cmds[0].sub_cmd, "aclog 1 2 3");
+	strcpy(clid_inst.cmds[2].sub_cmds[1].sub_cmd, "aclog a b c");
+	for(int i = 2 ; i < MAX_NUM_SUB_CMDS; i++)
+	{
+		clid_inst.cmds[2].sub_cmds[i].sub_cmd[0] = '\0';
+	}
+
+	for(int i = 3; i < MAX_NUM_CMDS; i++)
+	{
+		clid_inst.cmds[i].cmd_name[0] = '\0';
+		for(int j = 0 ; j < MAX_NUM_SUB_CMDS; j++)
+		{
+			clid_inst.cmds[i].sub_cmds[j].sub_cmd[0] = '\0';
+		}
+	}
+
+	return true;
+}
+
+static bool handle_receive_tcp_packet(int sockfd)
+{
+	struct ethtcp_header *header;
+	int header_size = sizeof(struct ethtcp_header);
+	char rxbuff[header_size];
+	int size = 0;
+
+	size = recv_data(sockfd, rxbuff, header_size);
+
+	if(size == 0)
+	{
+		LOG_INFO("Shell client from this fd %d just disconnected, remove it from our client list!", sockfd);
+		if(!release_shell_client_resources(sockfd))
+		{
+			LOG_ERROR("Failed to release_shell_client_resources()!");
+		}
+
+		return true;
+	} else if(size < 0)
+	{
+		LOG_ERROR("Receive data from this shell client failed, fd = %d!", sockfd);
+		return false;
+	}
+
+	header = (struct ethtcp_header *)rxbuff;
+	header->msgno 			= ntohl(header->msgno);
+	header->payloadLen 		= ntohl(header->payloadLen);
+	header->protRev			= ntohl(header->protRev);
+	header->receiver		= ntohl(header->receiver);
+	header->sender			= ntohl(header->sender);
+
+	LOG_INFO("Receiving %d bytes from fd %d", size, sockfd);
+	LOG_INFO("Re-interpret TCP packet: msgno: 0x%08x", header->msgno);
+	LOG_INFO("Re-interpret TCP packet: payloadLen: %u", header->payloadLen);
+	LOG_INFO("Re-interpret TCP packet: protRev: %u", header->protRev);
+	LOG_INFO("Re-interpret TCP packet: receiver: %u", header->receiver);
+	LOG_INFO("Re-interpret TCP packet: sender: %u", header->sender);
+
+	switch (header->msgno)
+	{
+	case CLID_GET_LIST_CMD_REQUEST:
+		LOG_INFO("Received CLID_GET_LIST_CMD_REQUEST!");
+		handle_receive_get_list_cmd_request(sockfd, header);
+		break;
+	
+	default:
+		LOG_ABN("Received unknown TCP packet, drop it!");
+		break;
+	}
+
+	return true;
+}
+
+static int recv_data(int sockfd, void *rx_buff, int nr_bytes_to_read)
+{
+	int length = 0;
+	int read_count = 0;
+
+	do
+	{
+		length = recv(sockfd, (char *)rx_buff + read_count, nr_bytes_to_read, 0);
+		if(length <= 0)
+		{
+			return length;
+		}
+
+		read_count += length;
+		nr_bytes_to_read = nr_bytes_to_read - length;
+	} while(nr_bytes_to_read > 0);
+
+	return read_count;
+}
+
+static bool release_shell_client_resources(int sockfd)
+{
+	int i = 0;
+	for(; i < MAX_NUM_SHELL_CLIENTS; i++)
+	{
+		if(clid_inst.clients[i].fd == sockfd)
+		{
+			close(clid_inst.clients[i].fd);
+			clid_inst.clients[i].fd = -1;
+
+			struct shell_client **iter;
+			iter = tfind(&clid_inst.clients[i].fd, &clid_inst.client_tree, compare_fd_in_client_tree);
+			if(iter == NULL)
+			{
+				LOG_ABN("Disconnected shell client not found in the tree, something wrong!");
+				return false;
+			}
+
+			tdelete(*iter, &clid_inst.client_tree, compare_client_in_client_tree);
+
+			break;
+		}
+	}
+
+	if(i == MAX_NUM_SHELL_CLIENTS)
+	{
+		LOG_ABN("Disconnected peer not found in server list, something wrong!");
+		return false;
+	}
+
+	return true;
+}
+
+static bool handle_receive_get_list_cmd_request(int sockfd, struct ethtcp_header *header)
+{
+	struct clid_get_list_cmd_request *req;
+	uint32_t payloadLen = header->payloadLen;
+	char rxbuff[payloadLen];
+	int size = 0;
+
+	size = recv_data(sockfd, rxbuff, payloadLen);
+
+	if(size <= 0)
+	{
+		LOG_ERROR("Failed to receive data from this shell client, fd = %d!", sockfd);
+		return false;
+	}
+
+	req = (struct clid_get_list_cmd_request *)rxbuff;
+	req->errorcode = ntohl(req->errorcode);
+
+	LOG_INFO("Receiving %d bytes from fd %d", size, sockfd);
+	LOG_INFO("Re-interpret TCP packet: errorcode: %u", req->errorcode);
+
+	if(!send_get_list_cmd_reply(sockfd))
+	{
+		return false;
+	}
+	
+	return true;
+}
+
+static void do_nothing(void *tree_node_data)
+{
+	(void)tree_node_data;
+}
+
+static bool send_get_list_cmd_reply(int sockfd)
+{
+	uint16_t num_cmds = 0;
+	uint32_t total_len = 2; // First two bytes for number of cmds
+	uint16_t cmd_len = 0;
+	char cmds_buff[2 + MAX_NUM_CMDS*(MAX_CMD_NAME_LENGTH + 2)];
+
+	for(int i = 0; i < MAX_NUM_CMDS; i++)
+	{
+		if(clid_inst.cmds[i].cmd_name[0] != '\0')
+		{
+			cmd_len = strlen(clid_inst.cmds[i].cmd_name);
+			num_cmds++;
+			*((uint16_t *)(&cmds_buff[total_len])) = cmd_len;
+			total_len += 2;
+			strcpy(&cmds_buff[total_len], clid_inst.cmds[i].cmd_name);
+			total_len += cmd_len;
+		}
+	}
+
+	*((uint16_t *)(&cmds_buff[0])) = num_cmds;
+
+	size_t msg_len = offsetof(struct ethtcp_msg, payload) + offsetof(struct clid_get_list_cmd_reply, payload) + total_len;
+	struct ethtcp_msg *rep = malloc(msg_len);
+	if(rep == NULL)
+	{
+		LOG_ERROR("Failed to malloc locate mbox reply message!");
+		return false;
+	}
+
+	uint32_t payload_length = offsetof(struct clid_get_list_cmd_reply, payload) + total_len;
+	rep->header.sender 					= htonl((uint32_t)getpid());
+	rep->header.receiver 					= htonl(111);
+	rep->header.protRev 					= htonl(15);
+	rep->header.msgno 					= htonl(CLID_GET_LIST_CMD_REPLY);
+	rep->header.payloadLen 					= htonl(payload_length);
+
+	rep->payload.clid_get_list_cmd_reply.errorcode		= htonl(CLID_STATUS_OK);
+	rep->payload.clid_get_list_cmd_reply.payload_length	= htonl(total_len);
+	memcpy(rep->payload.clid_get_list_cmd_reply.payload, cmds_buff, total_len);
+
+	int res = send(sockfd, rep, msg_len, 0);
+	if(res < 0)
+	{
+		LOG_ERROR("Failed to send CLID_GET_LIST_CMD_REPLY, errno = %d!", errno);
+		return false;
+	}
+
+	free(rep);
+	LOG_INFO("Sent CLID_GET_LIST_CMD_REPLY successfully!");
+	return true;
+}
+
+
 
 
 

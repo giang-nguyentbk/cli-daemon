@@ -11,6 +11,9 @@
 #include <pthread.h>
 #include <sys/timerfd.h>
 #include <search.h>
+#include <stddef.h>
+
+#include "tcp_proto.h"
 
 
 /*
@@ -73,7 +76,8 @@ struct history_cmd_queue {
 static volatile bool m_is_sigint = false;
 static bool m_is_exit = false;
 static bool m_is_connected = false;
-static char m_remote_ip[25] = "0.0.0.0";
+static char m_active_remote_ip[25] = "0.0.0.0";
+static int m_active_fd = -1;
 static char m_buffer[256];
 static int m_buff_len = 0;
 static char *m_args[32];
@@ -113,6 +117,10 @@ static bool handle_receive_broadcast_msg(int sockfd);
 static void add_new_cmd_to_history_queue(char *cmd);
 static void destroy_history_queue(struct history_cmd_queue *hist_queue);
 static bool connect_to_remote_host_via_index(int index);
+static bool send_get_list_cmd_request(int sockfd);
+static int recv_data(int sockfd, void *rx_buff, int nr_bytes_to_read);
+static bool receive_get_list_cmd_reply(int sockfd);
+static bool handle_receive_get_list_cmd_reply(int sockfd, struct ethtcp_header *header);
 
 static bool local_help(char **args);
 static bool local_exit(char **args);
@@ -152,7 +160,7 @@ int main(int argc, char* argv[])
 	{
 		if(m_is_connected)
 		{
-			printf ("%s:%hu$ ", m_remote_ip, TCP_CLID_PORT);
+			printf ("%s:%hu$ ", m_active_remote_ip, TCP_CLID_PORT);
 		} else
 		{
 			printf ("local$ ");
@@ -190,6 +198,10 @@ int main(int argc, char* argv[])
 	}
 
 	destroy_history_queue(&m_hist_cmd_queue);
+	if(m_active_fd != -1)
+	{
+		close(m_active_fd);
+	}
 	exit(EXIT_SUCCESS);
 }
 
@@ -950,9 +962,174 @@ static bool connect_to_remote_host_via_index(int index)
 		return false;
 	}
 
-	strcpy(m_remote_ip, m_remote_hosts[index].ip);
-	printf ("Connected to device: tcp://%s:%d\n", m_remote_hosts[index].ip, TCP_CLID_PORT);
+	strcpy(m_active_remote_ip, m_remote_hosts[index].ip);
+	m_active_fd = sockfd;
+	printf("Connected to device: tcp://%s:%d\n", m_remote_hosts[index].ip, TCP_CLID_PORT);
+
+	if(!send_get_list_cmd_request(sockfd))
+	{
+		return false;
+	}
+
+	if(!receive_get_list_cmd_reply(sockfd))
+	{
+		return false;
+	}
+
 	return true;
 }
+
+static bool send_get_list_cmd_request(int sockfd)
+{
+	size_t msg_len = offsetof(struct ethtcp_msg, payload) + sizeof(struct clid_get_list_cmd_request);
+	struct ethtcp_msg *req = malloc(msg_len);
+	if(req == NULL)
+	{
+		printf("Failed to malloc locate mbox request message!\n");
+		return false;
+	}
+
+	uint32_t payload_length = sizeof(struct clid_get_list_cmd_request);
+	req->header.sender 					= htonl((uint32_t)getpid());
+	req->header.receiver 					= htonl(111);
+	req->header.protRev 					= htonl(15);
+	req->header.msgno 					= htonl(CLID_GET_LIST_CMD_REQUEST);
+	req->header.payloadLen 					= htonl(payload_length);
+
+	req->payload.clid_get_list_cmd_request.errorcode	= htonl(CLID_STATUS_OK);
+
+	int res = send(sockfd, req, msg_len, 0);
+	if(res < 0)
+	{
+		printf("Failed to send CLID_GET_LIST_CMD_REQUEST, errno = %d!\n", errno);
+		return false;
+	}
+
+	free(req);
+	printf("Sent CLID_GET_LIST_CMD_REQUEST successfully!\n");
+	return true;
+}
+
+static int recv_data(int sockfd, void *rx_buff, int nr_bytes_to_read)
+{
+	int length = 0;
+	int read_count = 0;
+
+	do
+	{
+		length = recv(sockfd, (char *)rx_buff + read_count, nr_bytes_to_read, 0);
+		if(length <= 0)
+		{
+			return length;
+		}
+
+		read_count += length;
+		nr_bytes_to_read = nr_bytes_to_read - length;
+	} while(nr_bytes_to_read > 0);
+
+	return read_count;
+}
+
+static bool receive_get_list_cmd_reply(int sockfd)
+{
+	struct ethtcp_header *header;
+	int header_size = sizeof(struct ethtcp_header);
+	char rxbuff[header_size];
+	int size = 0;
+
+	size = recv_data(sockfd, rxbuff, header_size);
+
+	if(size == 0)
+	{
+		printf("Clid from this fd %d just disconnected!\n", sockfd);
+		return true;
+	} else if(size < 0)
+	{
+		printf("Receive data from this clid failed, fd = %d!\n", sockfd);
+		return false;
+	}
+
+	header = (struct ethtcp_header *)rxbuff;
+	header->msgno 			= ntohl(header->msgno);
+	header->payloadLen 		= ntohl(header->payloadLen);
+	header->protRev			= ntohl(header->protRev);
+	header->receiver		= ntohl(header->receiver);
+	header->sender			= ntohl(header->sender);
+
+	printf("Receiving %d bytes from fd %d\n", size, sockfd);
+	printf("Re-interpret TCP packet: msgno: 0x%08x\n", header->msgno);
+	printf("Re-interpret TCP packet: payloadLen: %u\n", header->payloadLen);
+	printf("Re-interpret TCP packet: protRev: %u\n", header->protRev);
+	printf("Re-interpret TCP packet: receiver: %u\n", header->receiver);
+	printf("Re-interpret TCP packet: sender: %u\n", header->sender);
+
+	switch (header->msgno)
+	{
+	case CLID_GET_LIST_CMD_REPLY:
+		printf("Received CLID_GET_LIST_CMD_REQUEST!\n");
+		handle_receive_get_list_cmd_reply(sockfd, header);
+		break;
+	
+	default:
+		printf("Received unknown TCP packet, drop it!\n");
+		break;
+	}
+
+	return true;
+}
+
+static bool handle_receive_get_list_cmd_reply(int sockfd, struct ethtcp_header *header)
+{
+	struct clid_get_list_cmd_reply *rep;
+	uint32_t payloadLen = header->payloadLen;
+	char rxbuff[payloadLen];
+	int size = 0;
+
+	size = recv_data(sockfd, rxbuff, payloadLen);
+
+	if(size <= 0)
+	{
+		printf("Failed to receive data from this clid, fd = %d!\n", sockfd);
+		return false;
+	}
+
+	rep = (struct clid_get_list_cmd_reply *)rxbuff;
+	rep->errorcode 			= ntohl(rep->errorcode);
+	rep->payload_length		= ntohl(rep->payload_length);
+
+	printf("Receiving %d bytes from fd %d\n", size, sockfd);
+	printf("Re-interpret TCP packet: errorcode: %u\n", rep->errorcode);
+	printf("Re-interpret TCP packet: payload_length: %u\n", rep->payload_length);
+
+	unsigned long offset = 2;
+	uint16_t cmd_len = 0;
+	char cmd_buff[32];
+	uint16_t num_cmds = *((uint16_t *)(&rep->payload));
+	printf("Re-interpret TCP packet: num_cmds: %hu\n", num_cmds);
+	for(int i = 0; i < num_cmds; i++)
+	{
+		cmd_len = *((uint16_t *)(&rep->payload + offset));
+		offset += 2;
+		memcpy(cmd_buff, (&rep->payload + offset), cmd_len);
+		cmd_buff[cmd_len] = '\0';
+		offset += cmd_len;
+		printf("Re-interpret TCP packet: cmd_len %d: %hu\n", i, cmd_len);
+		printf("Re-interpret TCP packet: cmd %d: %s\n", i, cmd_buff);
+	}
+	
+	return true;
+}
+
+
+
+
+
+
+
+
+
+
+
+
 
 
