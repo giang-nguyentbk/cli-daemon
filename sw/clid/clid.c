@@ -28,6 +28,7 @@
 #define MAX_NUM_SHELL_CLIENTS	255
 #define MAX_NUM_CMDS		255
 #define MAX_SUB_CMD_NAME_LENGTH	255
+#define MAX_CMD_DESC_LENGTH	128
 #define MAX_CMD_NAME_LENGTH	32
 #define MAX_NUM_SUB_CMDS	64
 #define NET_INTERFACE_ETH0	"eth0"
@@ -45,6 +46,7 @@ struct sub_command {
 
 struct command {
 	char			cmd_name[MAX_CMD_NAME_LENGTH];
+	char			cmd_desc[MAX_CMD_DESC_LENGTH];
 	struct sub_command	sub_cmds[MAX_NUM_SUB_CMDS];
 };
 
@@ -53,6 +55,7 @@ struct clid_instance {
 	struct sockaddr_in			tcp_addr;
 	struct shell_client			clients[MAX_NUM_SHELL_CLIENTS];
 	void					*client_tree;
+	uint16_t				cmd_count;
 	struct command				cmds[MAX_NUM_CMDS];
 	void					*cmd_tree;
 	// int					mbox_fd;
@@ -87,8 +90,10 @@ static bool handle_receive_tcp_packet(int sockfd);
 static int recv_data(int sockfd, void *rx_buff, int nr_bytes_to_read);
 static bool release_shell_client_resources(int sockfd);
 static bool handle_receive_get_list_cmd_request(int sockfd, struct ethtcp_header *header);
+static bool handle_receive_exe_cmd_request(int sockfd, struct ethtcp_header *header);
 static void do_nothing(void *tree_node_data);
 static bool send_get_list_cmd_reply(int sockfd);
+static bool send_exe_cmd_reply(int sockfd);
 
 
 
@@ -438,29 +443,37 @@ static bool setup_shell_clients(void)
 
 static bool setup_command_list(void)
 {
+	clid_inst.cmd_count = 0;
+
 	strcpy(clid_inst.cmds[0].cmd_name, "aclocal");
+	strcpy(clid_inst.cmds[0].cmd_desc, "Run aclocal command.");
 	strcpy(clid_inst.cmds[0].sub_cmds[0].sub_cmd, "aclocal 1 2 3");
 	strcpy(clid_inst.cmds[0].sub_cmds[1].sub_cmd, "aclocal a b c");
 	for(int i = 2 ; i < MAX_NUM_SUB_CMDS; i++)
 	{
 		clid_inst.cmds[0].sub_cmds[i].sub_cmd[0] = '\0';
 	}
+	clid_inst.cmd_count++;
 
 	strcpy(clid_inst.cmds[1].cmd_name, "acreconf");
+	strcpy(clid_inst.cmds[1].cmd_desc, "Run acreconf command.");
 	strcpy(clid_inst.cmds[1].sub_cmds[0].sub_cmd, "acreconf 1 2 3");
 	strcpy(clid_inst.cmds[1].sub_cmds[1].sub_cmd, "acreconf a b c");
 	for(int i = 2 ; i < MAX_NUM_SUB_CMDS; i++)
 	{
 		clid_inst.cmds[1].sub_cmds[i].sub_cmd[0] = '\0';
 	}
+	clid_inst.cmd_count++;
 
 	strcpy(clid_inst.cmds[2].cmd_name, "aclog");
+	strcpy(clid_inst.cmds[2].cmd_desc, "Run aclog command.");
 	strcpy(clid_inst.cmds[2].sub_cmds[0].sub_cmd, "aclog 1 2 3");
 	strcpy(clid_inst.cmds[2].sub_cmds[1].sub_cmd, "aclog a b c");
 	for(int i = 2 ; i < MAX_NUM_SUB_CMDS; i++)
 	{
 		clid_inst.cmds[2].sub_cmds[i].sub_cmd[0] = '\0';
 	}
+	clid_inst.cmd_count++;
 
 	for(int i = 3; i < MAX_NUM_CMDS; i++)
 	{
@@ -517,6 +530,11 @@ static bool handle_receive_tcp_packet(int sockfd)
 	case CLID_GET_LIST_CMD_REQUEST:
 		LOG_INFO("Received CLID_GET_LIST_CMD_REQUEST!");
 		handle_receive_get_list_cmd_request(sockfd, header);
+		break;
+	
+	case CLID_EXE_CMD_REQUEST:
+		LOG_INFO("Received CLID_GET_LIST_CMD_REQUEST!");
+		handle_receive_exe_cmd_request(sockfd, header);
 		break;
 	
 	default:
@@ -609,6 +627,66 @@ static bool handle_receive_get_list_cmd_request(int sockfd, struct ethtcp_header
 	return true;
 }
 
+static bool handle_receive_exe_cmd_request(int sockfd, struct ethtcp_header *header)
+{
+	struct clid_exe_cmd_request *req;
+	uint32_t payloadLen = header->payloadLen;
+	char rxbuff[payloadLen];
+	int size = 0;
+
+	size = recv_data(sockfd, rxbuff, payloadLen);
+
+	if(size <= 0)
+	{
+		LOG_ERROR("Failed to receive data from this shell client, fd = %d!", sockfd);
+		return false;
+	}
+
+	req = (struct clid_exe_cmd_request *)rxbuff;
+	req->errorcode = ntohl(req->errorcode);
+	req->payload_length = ntohl(req->payload_length);
+
+	LOG_INFO("Receiving %d bytes from fd %d", size, sockfd);
+	LOG_INFO("Re-interpret TCP packet: payload_length: %u", req->payload_length);
+
+	unsigned long offset = 0;
+	uint16_t len = 0;
+	char buff[MAX_CMD_NAME_LENGTH];
+
+	len = *((uint16_t *)(&req->payload + offset));
+	offset += 2;
+	LOG_INFO("Re-interpret TCP packet: cmd_name_len: %hu", len);
+	memcpy(buff, (&req->payload + offset), len);
+	buff[len] = '\0';
+	offset += len;
+	LOG_INFO("Re-interpret TCP packet: cmd_name: %s", buff);
+
+	uint16_t num_args = *((uint16_t *)(&req->payload + offset));
+	offset += 2;
+	LOG_INFO("Re-interpret TCP packet: num_args: %hu", num_args);
+
+	for(int i = 0; i < num_args; i++)
+	{
+		/* This is arguments */
+		len = *((uint16_t *)(&req->payload + offset));
+		offset += 2;
+		memcpy(buff, (&req->payload + offset), len);
+		buff[len] = '\0';
+		offset += len;
+		LOG_INFO("Re-interpret TCP packet: arg_len %d: %hu", i, len);
+		LOG_INFO("Re-interpret TCP packet: arg %d: %s", i, buff);
+	}
+
+	// TODO: forward to respective mailbox who registered cmds 
+
+	if(!send_exe_cmd_reply(sockfd))
+	{
+		return false;
+	}
+	
+	return true;
+}
+
 static void do_nothing(void *tree_node_data)
 {
 	(void)tree_node_data;
@@ -616,25 +694,29 @@ static void do_nothing(void *tree_node_data)
 
 static bool send_get_list_cmd_reply(int sockfd)
 {
-	uint16_t num_cmds = 0;
 	uint32_t total_len = 2; // First two bytes for number of cmds
 	uint16_t cmd_len = 0;
-	char cmds_buff[2 + MAX_NUM_CMDS*(MAX_CMD_NAME_LENGTH + 2)];
+	char cmds_buff[2 + clid_inst.cmd_count*(2 + MAX_CMD_NAME_LENGTH + 2 + MAX_CMD_DESC_LENGTH)];
 
 	for(int i = 0; i < MAX_NUM_CMDS; i++)
 	{
 		if(clid_inst.cmds[i].cmd_name[0] != '\0')
 		{
 			cmd_len = strlen(clid_inst.cmds[i].cmd_name);
-			num_cmds++;
 			*((uint16_t *)(&cmds_buff[total_len])) = cmd_len;
 			total_len += 2;
 			strcpy(&cmds_buff[total_len], clid_inst.cmds[i].cmd_name);
 			total_len += cmd_len;
+
+			cmd_len = strlen(clid_inst.cmds[i].cmd_desc);
+			*((uint16_t *)(&cmds_buff[total_len])) = cmd_len;
+			total_len += 2;
+			strcpy(&cmds_buff[total_len], clid_inst.cmds[i].cmd_desc);
+			total_len += cmd_len;
 		}
 	}
 
-	*((uint16_t *)(&cmds_buff[0])) = num_cmds;
+	*((uint16_t *)(&cmds_buff[0])) = clid_inst.cmd_count;
 
 	size_t msg_len = offsetof(struct ethtcp_msg, payload) + offsetof(struct clid_get_list_cmd_reply, payload) + total_len;
 	struct ethtcp_msg *rep = malloc(msg_len);
@@ -667,7 +749,42 @@ static bool send_get_list_cmd_reply(int sockfd)
 	return true;
 }
 
+static bool send_exe_cmd_reply(int sockfd)
+{
+	char cmd_output[512];
+	strcpy(cmd_output, "This is a notification toward user notifying that the command was executing successfully!");
+	uint32_t total_len = strlen(cmd_output);
 
+	size_t msg_len = offsetof(struct ethtcp_msg, payload) + offsetof(struct clid_exe_cmd_reply, payload) + total_len;
+	struct ethtcp_msg *rep = malloc(msg_len);
+	if(rep == NULL)
+	{
+		LOG_ERROR("Failed to malloc locate mbox reply message!");
+		return false;
+	}
+
+	uint32_t payload_length = offsetof(struct clid_exe_cmd_reply, payload) + total_len;
+	rep->header.sender 					= htonl((uint32_t)getpid());
+	rep->header.receiver 					= htonl(111);
+	rep->header.protRev 					= htonl(15);
+	rep->header.msgno 					= htonl(CLID_EXE_CMD_REPLY);
+	rep->header.payloadLen 					= htonl(payload_length);
+
+	rep->payload.clid_exe_cmd_reply.errorcode		= htonl(CLID_STATUS_OK);
+	rep->payload.clid_exe_cmd_reply.payload_length		= htonl(total_len);
+	memcpy(rep->payload.clid_exe_cmd_reply.payload, cmd_output, total_len);
+
+	int res = send(sockfd, rep, msg_len, 0);
+	if(res < 0)
+	{
+		LOG_ERROR("Failed to send CLID_EXE_CMD_REPLY, errno = %d!", errno);
+		return false;
+	}
+
+	free(rep);
+	LOG_INFO("Sent CLID_EXE_CMD_REPLY successfully!");
+	return true;
+}
 
 
 

@@ -27,33 +27,12 @@
 /*****************************************************************************\/
 *****                           INTERNAL TYPES                             *****
 *******************************************************************************/
-struct local_cmd {
-	char	cmd[32];
-	bool	(*handler)(char **args);
-	char	description[128];
-	char	syntax[64];
-};
-
-struct remote_host_info {
-	char		hostname[32];
-	char		ip[25];
-	int		alive_timer_fd;
-};
-
-struct history_cmd {
-	struct history_cmd	*next;
-	struct history_cmd	*prev;
-
-	char			cmd[256];
-};
-
-struct history_cmd_queue {
-	struct history_cmd	*head;
-	struct history_cmd	*tail;
-};
-
 #define NUM_INTERNAL_CMDS	6
+#define MAX_REMOTE_CMDS		255
 #define MAX_HISTORY_CMDS	50
+#define MAX_ARG_LENGTH		64
+#define MAX_NUM_ARGS		32
+#define MAX_HOST_NAME_LENGTH	255
 #define UDP_BROADCAST_PORT	11111
 #define TCP_CLID_PORT		33333
 #define MAX_NUM_REMOTE_HOSTS	255
@@ -70,6 +49,37 @@ struct history_cmd_queue {
 		pthread_mutex_unlock(lock);						\
 	} while(0)
 
+struct local_cmd {
+	char	cmd[MAX_ARG_LENGTH];
+	bool	(*handler)(char **args);
+	char	description[128];
+	char	syntax[64];
+};
+
+struct remote_cmd {
+	char	cmd[MAX_ARG_LENGTH];
+	char	description[128];
+};
+
+struct remote_host_info {
+	char		hostname[MAX_HOST_NAME_LENGTH];
+	char		ip[25];
+	int		alive_timer_fd;
+};
+
+struct history_cmd {
+	struct history_cmd	*next;
+	struct history_cmd	*prev;
+
+	char			cmd[256];
+};
+
+struct history_cmd_queue {
+	struct history_cmd	*head;
+	struct history_cmd	*tail;
+};
+
+
 /*****************************************************************************\/
 *****                         INTERNAL VARIABLES                           *****
 *******************************************************************************/
@@ -80,9 +90,11 @@ static char m_active_remote_ip[25] = "0.0.0.0";
 static int m_active_fd = -1;
 static char m_buffer[256];
 static int m_buff_len = 0;
-static char *m_args[32];
+static char *m_args[MAX_NUM_ARGS];
 static int m_nr_args = 0;
 static struct local_cmd m_local_cmds[NUM_INTERNAL_CMDS];
+static struct remote_cmd m_remote_cmds[MAX_REMOTE_CMDS];
+static void *m_remote_cmd_tree;
 static int m_udp_fd;
 static struct remote_host_info m_remote_hosts[MAX_NUM_REMOTE_HOSTS];
 static pthread_mutex_t m_remote_hosts_mtx;
@@ -113,6 +125,8 @@ static bool setup_alive_timer(int *timer_fd);
 static bool restart_alive_timer(int timer_fd);
 static int compare_hostname_remotehost_tree(const void *pa, const void *pb);
 static int compare_host_remotehost_tree(const void *pa, const void *pb);
+static int compare_cmd_name_in_remotecmd_tree(const void *pa, const void *pb);
+static int compare_remotecmd_in_remotecmd_tree(const void *pa, const void *pb);
 static bool handle_receive_broadcast_msg(int sockfd);
 static void add_new_cmd_to_history_queue(char *cmd);
 static void destroy_history_queue(struct history_cmd_queue *hist_queue);
@@ -121,6 +135,11 @@ static bool send_get_list_cmd_request(int sockfd);
 static int recv_data(int sockfd, void *rx_buff, int nr_bytes_to_read);
 static bool receive_get_list_cmd_reply(int sockfd);
 static bool handle_receive_get_list_cmd_reply(int sockfd, struct ethtcp_header *header);
+static bool setup_remote_cmds_list(void);
+static void do_nothing(void *tree_node_data);
+static bool send_exe_cmd_request(int sockfd);
+static bool receive_exe_cmd_reply(int sockfd);
+static bool handle_receive_exe_cmd_reply(int sockfd, struct ethtcp_header *header);
 
 static bool local_help(char **args);
 static bool local_exit(char **args);
@@ -140,7 +159,7 @@ int main(int argc, char* argv[])
 
 	shell_init();
 
-	if(!setup_local_cmds())
+	if(!setup_local_cmds() || !setup_remote_cmds_list())
 	{
 		printf("Failed to set local shell commands!\n");
 		exit(EXIT_FAILURE);
@@ -186,7 +205,18 @@ int main(int argc, char* argv[])
 				execute_local_cmd(index, m_args);
 			} else
 			{
-				printf("%s: calling remote command!\n", m_args[0]);
+				struct remote_cmd **iter;
+				iter = tfind(m_args[0], &m_remote_cmd_tree, compare_cmd_name_in_remotecmd_tree);
+				if(iter == NULL)
+				{
+					printf("Unknown command: %s!\n", m_args[0]);
+				} else
+				{
+					printf("Executing remote command %s...\n", m_args[0]);
+					send_exe_cmd_request(m_active_fd);
+
+					receive_exe_cmd_reply(m_active_fd);
+				}
 			}
 		}
 
@@ -198,10 +228,26 @@ int main(int argc, char* argv[])
 	}
 
 	destroy_history_queue(&m_hist_cmd_queue);
+
 	if(m_active_fd != -1)
 	{
 		close(m_active_fd);
+		m_active_fd = -1;
 	}
+
+	for(int i = 0; i < MAX_REMOTE_CMDS; i++)
+	{
+		if(m_remote_cmds[i].cmd[0] != '\0')
+		{
+			tdelete(m_remote_cmds[i].cmd, &m_remote_cmd_tree, compare_cmd_name_in_remotecmd_tree);
+
+			m_remote_cmds[i].cmd[0] = '\0';
+			m_remote_cmds[i].description[0] = '\0';
+		}
+	}
+
+	tdestroy(m_remote_cmd_tree, do_nothing);
+
 	exit(EXIT_SUCCESS);
 }
 
@@ -282,7 +328,7 @@ static int get_token(const char *str, char *token)
 	{
 		if(*str == '-')
 		{
-			/* Token as a flag or negative interger, for example, -D, -a, -f, -99, -22,... */
+			/* Token as a single flag or negative interger, for example, -D, -a, -f, -99, -22,... */
 			if(i == 0)
 			{
 				start_with_one_minus = true;
@@ -313,7 +359,7 @@ static int get_token(const char *str, char *token)
 				continue;
 			}
 
-			printf("Invalid argurment with '-'!\n");
+			printf("Invalid argurment with minuses '-'!\n");
 			free(token);
 			return -1;
 		} else if((*str >= '0' && *str <= '9'))
@@ -322,7 +368,7 @@ static int get_token(const char *str, char *token)
 			/* Or if there were a token starting with one minus, but not negative interger (instead, it's a single flag like -D, -a, -v,...), no more than two characters accepted */
 			if((start_with_two_minus && i == 2) || (start_with_one_minus && is_single_flag))
 			{
-				printf("Invalid argurment with digits!\n");
+				printf("Invalid argurment with digits '0-9'!\n");
 				free(token);
 				return -1;
 			}
@@ -342,7 +388,7 @@ static int get_token(const char *str, char *token)
 			/* Or if there were a token starting with a digit, not allowed to have alphabets right then */
 			if((start_with_one_minus && i != 1) || (start_with_int))
 			{
-				printf("Invalid argurment with alphabets!\n");
+				printf("Invalid argurment with alphabets 'a-z' or 'A-Z'!\n");
 				free(token);
 				return -1;
 			} else if(start_with_one_minus && i == 1)
@@ -353,6 +399,21 @@ static int get_token(const char *str, char *token)
 			token[i] = *str++;
 			i++;
 			nr_chars++;
+		} else if(*str == '.')
+		{
+			/* Or if there were a token starting with a digit, only floating point '.' is accepted */
+			/* Or if there were a token starting with a minus '-', floating point '.' is also accepted */
+			if(start_with_int || (start_with_one_minus && !is_single_flag))
+			{
+				token[i] = *str++;
+				i++;
+				nr_chars++;
+			} else
+			{
+				printf("Invalid argurment with dots '.'!\n");
+				free(token);
+				return -1;
+			}
 		} else
 		{
 			/* Any characters except for 0-9, a-z, A-Z and '-' are not allowed */
@@ -376,7 +437,7 @@ static int get_token(const char *str, char *token)
 
 static int get_args(char *cmd, char *args[])
 {
-	char *token = malloc(32);
+	char *token = malloc(MAX_ARG_LENGTH);
 	
 	int i = 0;
 	int nr_chars = 0;
@@ -384,7 +445,7 @@ static int get_args(char *cmd, char *args[])
 	{
 		args[i] = token;
 		// printf("Token %d: \"%s\"\n", i, token);
-		token = malloc(32);
+		token = malloc(MAX_ARG_LENGTH);
 		cmd += nr_chars;
 		i++;
 	}
@@ -481,6 +542,13 @@ static bool local_help(char **args)
 	{
 		printf("%-64s %-128s\n", m_local_cmds[i].syntax, m_local_cmds[i].description);
 	}
+	for(int i = 0; i < MAX_REMOTE_CMDS; i++)
+	{
+		if(m_remote_cmds[i].cmd[0] != '\0')
+		{
+			printf("%-64s %-128s\n", m_remote_cmds[i].cmd, m_remote_cmds[i].description);
+		}
+	}
 	printf("\n");
 
 	printf("Syntax Explanation:\n");
@@ -500,15 +568,16 @@ static bool local_exit(char **args)
 {
 	(void)args;
 
+	printf("Exiting the shell...\n");
+
 	if(m_nr_args > 1)
 	{
 		printf("exit: Too many arguments!\n\n");
 		return false;
 	}
 
-	printf("exit: calling this command!\n");
+	printf("Exited the shell successfully!\n");
 
-	printf("\n");
 	m_is_exit = true;
 	return true;
 }
@@ -529,7 +598,7 @@ static bool local_history(char **args)
 	for(int i = 0; i < m_num_hist_cmd; i++)
 	{
 		char index[5];
-		sprintf(index, "%d", i);
+		sprintf(index, "%d", i + 1);
 		printf("%-5s %-128s\n", index, iter->cmd);
 		iter = iter->next;
 	}
@@ -548,8 +617,8 @@ static bool local_scan(char **args)
 		return false;
 	}
 
-	printf("%-10s %-32s %-25s %-7s\n", "Unique ID", "Hostname", "IP Address", "Port");
-	printf("%-10s %-32s %-25s %-7s\n", "---------", "--------", "----------", "----");
+	printf("%-10s %-64s %-25s %-7s\n", "Unique ID", "Hostname", "IP Address", "Port");
+	printf("%-10s %-64s %-25s %-7s\n", "---------", "--------", "----------", "----");
 	MUTEX_LOCK(&m_remote_hosts_mtx);
 	for(int i = 0; i < MAX_NUM_REMOTE_HOSTS; i++)
 	{
@@ -559,7 +628,7 @@ static bool local_scan(char **args)
 			char port[7];
 			sprintf(index, "%d", i + 1);
 			sprintf(port, "%hu", TCP_CLID_PORT);
-			printf("%-10s %-32s %-25s %-7s\n", index, m_remote_hosts[i].hostname, m_remote_hosts[i].ip, port);
+			printf("%-10s %-64s %-25s %-7s\n", index, m_remote_hosts[i].hostname, m_remote_hosts[i].ip, port);
 		}
 	}
 	MUTEX_UNLOCK(&m_remote_hosts_mtx);
@@ -600,9 +669,30 @@ static bool local_connect(char **args)
 static bool local_disconnect(char **args)
 {
 	(void)args;
-	printf("disconnect: calling this command!\n");
+	printf("Disconnecting from remote device...\n");
 	printf("\n");
 	m_is_connected = false;
+	
+	if(m_active_fd != -1)
+	{
+		close(m_active_fd);
+		m_active_fd = -1;
+	}
+
+	for(int i = 0; i < MAX_REMOTE_CMDS; i++)
+	{
+		if(m_remote_cmds[i].cmd[0] != '\0')
+		{
+			tdelete(m_remote_cmds[i].cmd, &m_remote_cmd_tree, compare_cmd_name_in_remotecmd_tree);
+
+			m_remote_cmds[i].cmd[0] = '\0';
+			m_remote_cmds[i].description[0] = '\0';
+		}
+	}
+
+	tdestroy(m_remote_cmd_tree, do_nothing);
+
+	printf("Disconnected from remote device successfully!\n");
 	return true;
 }
 
@@ -767,7 +857,7 @@ static bool handle_receive_broadcast_msg(int sockfd)
 
 	rx_buff[res] = '\0';
 
-	char hostname[32];
+	char hostname[MAX_HOST_NAME_LENGTH];
 	char tcp_ip[25];
 	uint16_t tcp_port;
 	/* Instead of format string "%s" as usual, we must use "%[^:]" meaning read to string tcp_ip until character ':'. */
@@ -854,11 +944,22 @@ static bool setup_udp_remote_hosts(void)
 	MUTEX_LOCK(&m_remote_hosts_mtx);
 	for(int i = 0; i < MAX_NUM_REMOTE_HOSTS; i++)
 	{
-		strcpy(m_remote_hosts[i].hostname, "");
+		m_remote_hosts[i].hostname[0] = '\0';
 		strcpy(m_remote_hosts[i].ip, "0.0.0.0");
 		m_remote_hosts[i].alive_timer_fd = -1;
 	}
 	MUTEX_UNLOCK(&m_remote_hosts_mtx);
+
+	return true;
+}
+
+static bool setup_remote_cmds_list(void)
+{
+	for(int i = 0; i < MAX_REMOTE_CMDS; i++)
+	{
+		m_remote_cmds[i].cmd[0] = '\0';
+		m_remote_cmds[i].description[0] = '\0';
+	}
 
 	return true;
 }
@@ -877,6 +978,22 @@ static int compare_host_remotehost_tree(const void *pa, const void *pb)
 	const struct remote_host_info *peer_b = pb;
 	
 	return strcmp(peer_a->hostname, peer_b->hostname);
+}
+
+static int compare_cmd_name_in_remotecmd_tree(const void *pa, const void *pb)
+{
+	const char *cmd_name = pa;
+	const struct remote_cmd *remote_cmd = pb;
+
+	return strcmp(cmd_name, remote_cmd->cmd);
+}
+
+static int compare_remotecmd_in_remotecmd_tree(const void *pa, const void *pb)
+{
+	const struct remote_cmd *remote_cmda = pa;
+	const struct remote_cmd *remote_cmdb = pb;
+	
+	return strcmp(remote_cmda->cmd, remote_cmdb->cmd);
 }
 
 static void add_new_cmd_to_history_queue(char *cmd)
@@ -1103,29 +1220,200 @@ static bool handle_receive_get_list_cmd_reply(int sockfd, struct ethtcp_header *
 
 	unsigned long offset = 2;
 	uint16_t cmd_len = 0;
-	char cmd_buff[32];
+	char cmd_buff[MAX_ARG_LENGTH];
 	uint16_t num_cmds = *((uint16_t *)(&rep->payload));
 	printf("Re-interpret TCP packet: num_cmds: %hu\n", num_cmds);
 	for(int i = 0; i < num_cmds; i++)
 	{
-		cmd_len = *((uint16_t *)(&rep->payload + offset));
-		offset += 2;
-		memcpy(cmd_buff, (&rep->payload + offset), cmd_len);
-		cmd_buff[cmd_len] = '\0';
-		offset += cmd_len;
-		printf("Re-interpret TCP packet: cmd_len %d: %hu\n", i, cmd_len);
-		printf("Re-interpret TCP packet: cmd %d: %s\n", i, cmd_buff);
+		int j = 0;
+		for(; j < MAX_REMOTE_CMDS; j++)
+		{
+			if(m_remote_cmds[j].cmd[0] == '\0')
+			{
+				/* This is command name */
+				cmd_len = *((uint16_t *)(&rep->payload + offset));
+				offset += 2;
+				memcpy(cmd_buff, (&rep->payload + offset), cmd_len);
+				cmd_buff[cmd_len] = '\0';
+				offset += cmd_len;
+				printf("Re-interpret TCP packet: cmd_len %d: %hu\n", i, cmd_len);
+				printf("Re-interpret TCP packet: cmd %d: %s\n", i, cmd_buff);
+				strcpy(m_remote_cmds[j].cmd, cmd_buff);
+
+				/* This is command description */
+				cmd_len = *((uint16_t *)(&rep->payload + offset));
+				offset += 2;
+				memcpy(cmd_buff, (&rep->payload + offset), cmd_len);
+				cmd_buff[cmd_len] = '\0';
+				offset += cmd_len;
+				printf("Re-interpret TCP packet: cmd_desc_len %d: %hu\n", i, cmd_len);
+				printf("Re-interpret TCP packet: cmd_desc %d: %s\n", i, cmd_buff);
+				strcpy(m_remote_cmds[j].description, cmd_buff);
+
+				struct remote_cmd **iter;
+				iter = tfind(m_remote_cmds[j].cmd, &m_remote_cmd_tree, compare_cmd_name_in_remotecmd_tree);
+				if(iter != NULL)
+				{
+					printf("Command \"%s\" already added in remote cmd tree, something wrong!\n", m_remote_cmds[j].cmd);
+				} else
+				{
+					tsearch(&m_remote_cmds[j], &m_remote_cmd_tree, compare_remotecmd_in_remotecmd_tree);
+				}
+
+				break;
+			}
+		}
+
+		if(j == MAX_REMOTE_CMDS)
+		{
+			printf("No more than %d remote cmd can be added!\n", MAX_REMOTE_CMDS);
+			return false;
+		}
 	}
 	
 	return true;
 }
 
+static void do_nothing(void *tree_node_data)
+{
+	(void)tree_node_data;
+}
 
+static bool send_exe_cmd_request(int sockfd)
+{
+	uint32_t total_len = 0;
+	uint16_t cmd_len = 0;
+	char cmds_buff[2 + strlen(m_args[0]) + 2 + m_nr_args*(2 + MAX_ARG_LENGTH)];
 
+	cmd_len = strlen(m_args[0]);
+	*((uint16_t *)(&cmds_buff[total_len])) = cmd_len;
+	total_len += 2;
+	strcpy(&cmds_buff[total_len], m_args[0]);
+	total_len += cmd_len;
 
+	*((uint16_t *)(&cmds_buff[total_len])) = m_nr_args;
+	total_len += 2;
 
+	for(int i = 0; i < m_nr_args; i++)
+	{
+		cmd_len = strlen(m_args[i]);
+		*((uint16_t *)(&cmds_buff[total_len])) = cmd_len;
+		total_len += 2;
+		strcpy(&cmds_buff[total_len], m_args[i]);
+		total_len += cmd_len;
+	}
 
+	size_t msg_len = offsetof(struct ethtcp_msg, payload) + offsetof(struct clid_exe_cmd_request, payload) + total_len;
+	struct ethtcp_msg *rep = malloc(msg_len);
+	if(rep == NULL)
+	{
+		printf("Failed to malloc locate mbox reply message!\n");
+		return false;
+	}
 
+	uint32_t payload_length = offsetof(struct clid_exe_cmd_request, payload) + total_len;
+	rep->header.sender 					= htonl((uint32_t)getpid());
+	rep->header.receiver 					= htonl(111);
+	rep->header.protRev 					= htonl(15);
+	rep->header.msgno 					= htonl(CLID_EXE_CMD_REQUEST);
+	rep->header.payloadLen 					= htonl(payload_length);
+
+	rep->payload.clid_exe_cmd_request.errorcode		= htonl(CLID_STATUS_OK);
+	rep->payload.clid_exe_cmd_request.payload_length	= htonl(total_len);
+	memcpy(rep->payload.clid_exe_cmd_request.payload, cmds_buff, total_len);
+
+	int res = send(sockfd, rep, msg_len, 0);
+	if(res < 0)
+	{
+		printf("Failed to send CLID_EXE_CMD_REQUEST, errno = %d!\n", errno);
+		return false;
+	}
+
+	free(rep);
+	printf("Sent CLID_EXE_CMD_REQUEST successfully!\n");
+	return true;
+}
+
+static bool receive_exe_cmd_reply(int sockfd)
+{
+	struct ethtcp_header *header;
+	int header_size = sizeof(struct ethtcp_header);
+	char rxbuff[header_size];
+	int size = 0;
+
+	size = recv_data(sockfd, rxbuff, header_size);
+
+	if(size == 0)
+	{
+		printf("Clid from this fd %d just disconnected!\n", sockfd);
+		return true;
+	} else if(size < 0)
+	{
+		printf("Receive data from this clid failed, fd = %d!\n", sockfd);
+		return false;
+	}
+
+	header = (struct ethtcp_header *)rxbuff;
+	header->msgno 			= ntohl(header->msgno);
+	header->payloadLen 		= ntohl(header->payloadLen);
+	header->protRev			= ntohl(header->protRev);
+	header->receiver		= ntohl(header->receiver);
+	header->sender			= ntohl(header->sender);
+
+	printf("Receiving %d bytes from fd %d\n", size, sockfd);
+	printf("Re-interpret TCP packet: msgno: 0x%08x\n", header->msgno);
+	printf("Re-interpret TCP packet: payloadLen: %u\n", header->payloadLen);
+	printf("Re-interpret TCP packet: protRev: %u\n", header->protRev);
+	printf("Re-interpret TCP packet: receiver: %u\n", header->receiver);
+	printf("Re-interpret TCP packet: sender: %u\n", header->sender);
+
+	switch (header->msgno)
+	{
+	case CLID_EXE_CMD_REPLY:
+		printf("Received CLID_GET_LIST_CMD_REQUEST!\n");
+		handle_receive_exe_cmd_reply(sockfd, header);
+		break;
+	
+	default:
+		printf("Received unknown TCP packet, drop it!\n");
+		break;
+	}
+
+	return true;
+}
+
+static bool handle_receive_exe_cmd_reply(int sockfd, struct ethtcp_header *header)
+{
+	struct clid_exe_cmd_reply *rep;
+	uint32_t payloadLen = header->payloadLen;
+	char rxbuff[payloadLen];
+	int size = 0;
+
+	size = recv_data(sockfd, rxbuff, payloadLen);
+
+	if(size <= 0)
+	{
+		printf("Failed to receive data from this clid, fd = %d!\n", sockfd);
+		return false;
+	}
+
+	rep = (struct clid_exe_cmd_reply *)rxbuff;
+	rep->errorcode 			= ntohl(rep->errorcode);
+	rep->payload_length		= ntohl(rep->payload_length);
+
+	printf("Receiving %d bytes from fd %d\n", size, sockfd);
+	printf("Re-interpret TCP packet: errorcode: %u\n", rep->errorcode);
+	printf("Re-interpret TCP packet: payload_length: %u\n", rep->payload_length);
+
+	char buff[512];
+	memcpy(buff, rep->payload, rep->payload_length);
+	buff[rep->payload_length] = '\0';
+	
+	printf("Re-interpret TCP packet: cmd_output: %s\n", buff);
+	printf("\n");
+
+	return true;
+}
 
 
 
