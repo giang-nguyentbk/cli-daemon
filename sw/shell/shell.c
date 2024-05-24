@@ -304,6 +304,9 @@ static bool read_input_cmd(char *buff)
 		}
 	}
 
+	// Implement up/down arrows to show historical commands:
+	// Read more at https://stackoverflow.com/questions/7469139/what-is-the-equivalent-to-getch-getche-in-linux
+
 	return true;
 }
 
