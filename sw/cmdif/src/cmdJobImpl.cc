@@ -14,8 +14,6 @@ namespace CmdIf
 namespace V1
 {
 
-using CmdIf::V1::CmdTypesIf;
-
 CmdJobImpl::CmdJobImpl(const std::string& cmdName, const std::vector<std::string>& args, std::string& output, itc_mbox_id_t clidMboxId)
 	: m_cmdName(cmdName),
 	  m_args(args),

@@ -30,12 +30,13 @@ public:
 	{
 		NORMAL,
 		ALREADY_EXISTS,
-		NOT_FOUND
+		NOT_FOUND,
+		INTERNAL_ERROR
 	};
 
 	static CmdRegisterIf& getInstance();
 
-	using CmdHandler = std::function<void(std::shared_ptr<CmdJobIf> job)>;
+	using CmdHandler = std::function<void(std::shared_ptr<CmdIf::V1::CmdJobIf> job)>;
 
 	virtual ReturnCode registerCmdHandler(const std::string& cmdName, const CmdHandler& cmdHandler) = 0;
 	virtual ReturnCode deregisterCmdHandler(const std::string& cmdName) = 0;

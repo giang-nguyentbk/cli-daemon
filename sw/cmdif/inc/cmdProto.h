@@ -17,13 +17,15 @@
 #define CMDIF_RET_FAIL					30
 
 #define CMDIF_MSGBASE					0x17700000
-#define CMDIF_REG_CMD_LIST_REQUEST			(CMDIF_MSGBASE + 1)
-#define CMDIF_REG_CMD_LIST_REPLY			(CMDIF_MSGBASE + 2)
-#define CMDIF_EXE_CMD_REQUEST				(CMDIF_MSGBASE + 3)
-#define CMDIF_EXE_CMD_REPLY				(CMDIF_MSGBASE + 4)
+#define CMDIF_REG_CMD_REQUEST				(CMDIF_MSGBASE + 1)
+#define CMDIF_REG_CMD_REPLY				(CMDIF_MSGBASE + 2)
+#define CMDIF_DEREG_CMD_REQUEST				(CMDIF_MSGBASE + 3)
+#define CMDIF_DEREG_CMD_REPLY				(CMDIF_MSGBASE + 4)
+#define CMDIF_EXE_CMD_REQUEST				(CMDIF_MSGBASE + 5)
+#define CMDIF_EXE_CMD_REPLY				(CMDIF_MSGBASE + 6)
 
 
-struct CmdIfRegCmdListRequestS
+struct CmdIfRegCmdRequestS
 {
 	uint32_t msgNo;
 	uint32_t payloadLen;
@@ -35,7 +37,24 @@ struct CmdIfRegCmdListRequestS
 	*/
 };
 
-struct CmdIfRegCmdListReplyS
+struct CmdIfRegCmdReplyS
+{
+	uint32_t msgNo;
+};
+
+struct CmdIfDeregCmdRequestS
+{
+	uint32_t msgNo;
+	uint32_t payloadLen;
+	uint8_t payload[1];
+
+	/* Format:
+	
+	
+	*/
+};
+
+struct CmdIfDeregCmdReplyS
 {
 	uint32_t msgNo;
 };
@@ -68,8 +87,10 @@ struct CmdIfExeCmdReplyS
 
 union itc_msg
 {
-	struct CmdIfRegCmdListRequestS			cmdIfRegCmdListRequest;
-	struct CmdIfRegCmdListReplyS			cmdIfRegCmdListReply;
+	struct CmdIfRegCmdRequestS			cmdIfRegCmdRequest;
+	struct CmdIfRegCmdReplyS			cmdIfRegCmdReply;
+	struct CmdIfDeregCmdRequestS			cmdIfDeregCmdRequest;
+	struct CmdIfDeregCmdReplyS			cmdIfDeregCmdReply;
 	struct CmdIfExeCmdRequestS			cmdIfExeCmdRequest;
 	struct CmdIfExeCmdReplyS			cmdIfExeCmdReply;
 };

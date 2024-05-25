@@ -36,7 +36,7 @@ void LOG_DEBUG_ZZ(const char *file, int line, const char *format, ...);
 #define LOG_DEBUG(format, ...) LOG_DEBUG_ZZ(__FILENAME__, __LINE__, format, ##__VA_ARGS__)
 
 /*
-	By high-resolution time measurement, it's showed that using LOG_MACRO() only costs 200% overhead compared to original printf().
+	From high-resolution time measurement, it's showed that using LOG_MACRO() only costs 200% overhead compared to original printf().
 	Using printf() consumes about 35-40 us while using LOG_MACRO(), it's 65-75 us. It's still in acceptable ranges, right? (-_-)
 
 	By the way, using "inline" keyword for these LOG_MACRO_ZZ apparently has no effect! That's interesting as well!
