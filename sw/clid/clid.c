@@ -8,15 +8,15 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <errno.h>
-#include <pthread.h>
 #include <sys/timerfd.h>
 #include <search.h>
 #include <sys/ioctl.h>
 #include <net/if.h>
 #include <stddef.h>
 
-// #include <itc.h>
-#include "traceUtils.h"
+#include <itc.h>
+#include <traceIf.h>
+
 #include "tcp_proto.h"
 
 /*****************************************************************************\/
@@ -33,6 +33,7 @@
 #define MAX_NUM_SUB_CMDS	64
 #define NET_INTERFACE_ETH0	"eth0"
 #define CLID_LOG_FILENAME	"clid.log"
+#define CLID_MBOX_NAME		"clid_mailbox"
 
 
 struct shell_client {
@@ -58,9 +59,8 @@ struct clid_instance {
 	uint16_t				cmd_count;
 	struct command				cmds[MAX_NUM_CMDS];
 	void					*cmd_tree;
-	// int					mbox_fd;
-	// itc_mbox_id_t				mbox_id;
-	// s
+	int					mbox_fd;
+	itc_mbox_id_t				mbox_id;
 };
 
 
@@ -78,7 +78,7 @@ static void clid_init(void);
 static void clid_sig_handler(int signo);
 static void clid_exit_handler(void);
 static bool setup_log_file(void);
-// static bool setup_mailbox(void);
+static bool setup_mailbox(void);
 static bool setup_tcp_server(void);
 static struct in_addr get_ip_address_from_network_interface(int sockfd, char *interface);
 static bool handle_accept_new_connection(int sockfd);
@@ -149,9 +149,9 @@ int main(int argc, char* argv[])
 	// At normal termination we just clean up our resources by registration a exit_handler
 	atexit(clid_exit_handler);
 
-	if(!setup_tcp_server() || !setup_shell_clients() || !setup_command_list())
+	if(!setup_tcp_server() || !setup_shell_clients() || !setup_command_list() || !setup_mailbox())
 	{
-		LOG_ERROR("Failed to setup clid daemon!");
+		TPT_TRACE(TRACE_ERROR, "Failed to setup clid daemon!");
 		exit(EXIT_FAILURE);
 	}
 
@@ -176,7 +176,7 @@ int main(int argc, char* argv[])
 		res = select(max_fd + 1, &fdset, NULL, NULL, NULL);
 		if(res < 0)
 		{
-			LOG_ERROR("Failed to select()!");
+			TPT_TRACE(TRACE_ERROR, "Failed to select()!");
 			exit(EXIT_FAILURE);
 		}
 
@@ -184,7 +184,7 @@ int main(int argc, char* argv[])
 		{
 			if(handle_accept_new_connection(clid_inst.tcp_fd) == false)
 			{
-				LOG_ERROR("Failed to handle_accept_new_connection()!");
+				TPT_TRACE(TRACE_ERROR, "Failed to handle_accept_new_connection()!");
 				exit(EXIT_FAILURE);
 			}
 		}
@@ -195,7 +195,7 @@ int main(int argc, char* argv[])
 			{
 				if(handle_receive_tcp_packet(clid_inst.clients[i].fd) == false)
 				{
-					LOG_ERROR("Failed to handle_accept_new_connection()!");
+					TPT_TRACE(TRACE_ERROR, "Failed to handle_accept_new_connection()!");
 					exit(EXIT_FAILURE);
 				}
 			}
@@ -226,7 +226,7 @@ static void clid_init(void)
 static void clid_sig_handler(int signo)
 {
 	// Call our own exit_handler
-	LOG_INFO("CLID is terminated with SIG = %d, calling exit handler...", signo);
+	TPT_TRACE(TRACE_INFO, "CLID is terminated with SIG = %d, calling exit handler...", signo);
 	clid_exit_handler();
 
 	// After clean up, resume raising the suppressed signal
@@ -236,12 +236,12 @@ static void clid_sig_handler(int signo)
 
 static void clid_exit_handler(void)
 {
-	LOG_INFO("CLID is terminated, calling exit handler...");
+	TPT_TRACE(TRACE_INFO, "CLID is terminated, calling exit handler...");
 
 	close(clid_inst.tcp_fd);
 	tdestroy(clid_inst.client_tree, do_nothing);
 	
-	LOG_INFO("CLID exit handler finished!");
+	TPT_TRACE(TRACE_INFO, "CLID exit handler finished!");
 }
 
 static bool setup_log_file(void)
@@ -261,26 +261,32 @@ static bool setup_log_file(void)
 	return true;
 }
 
-// static bool setup_mailbox(void)
-// {
-// 	clid_inst.tcp_server_mbox_id = itc_create_mailbox(LOG_GATEWAY_MBOX_TCP_SER_NAME2, LOG_NO_NAMESPACE); // TEST ONLY
-// 	if(clid_inst.tcp_server_mbox_id == LOG_NO_MBOX_ID)
-// 	{
-// 		LOG_ERROR("Failed to create mailbox %s", LOG_GATEWAY_MBOX_TCP_SER_NAME2); // TEST ONLY
-// 		return false;
-// 	}
+static bool setup_mailbox(void)
+{
+	if(itc_init(3, ITC_MALLOC, 0) == false)
+	{
+		TPT_TRACE(TRACE_ERROR, "Failed to itc_init() by CLID!");
+		return false;
+	}
 
-// 	clid_inst.tcp_server_mbox_fd = itc_get_fd(clid_inst.tcp_server_mbox_id);
-// 	LOG_INFO("Create TCP server mailbox \"%s\" successfully!", LOG_GATEWAY_MBOX_TCP_SER_NAME2); // TEST ONLY
-// 	return true;
-// }
+	clid_inst.mbox_id = itc_create_mailbox(CLID_MBOX_NAME, ITC_NO_NAMESPACE);
+	if(clid_inst.mbox_id == ITC_NO_MBOX_ID)
+	{
+		TPT_TRACE(TRACE_ERROR, "Failed to create mailbox %s", CLID_MBOX_NAME);
+		return false;
+	}
+
+	clid_inst.mbox_fd = itc_get_fd(clid_inst.mbox_id);
+	TPT_TRACE(TRACE_INFO, "Create TCP server mailbox \"%s\" successfully!", CLID_MBOX_NAME);
+	return true;
+}
 
 static bool setup_tcp_server(void)
 {
 	int tcpfd = socket(AF_INET, SOCK_STREAM, 0);
 	if(tcpfd < 0)
 	{
-		LOG_ERROR("Failed to get socket(), errno = %d!", errno);
+		TPT_TRACE(TRACE_ERROR, "Failed to get socket(), errno = %d!", errno);
 		return false;
 	}
 
@@ -288,7 +294,7 @@ static bool setup_tcp_server(void)
 	int res = setsockopt(tcpfd, SOL_SOCKET, SO_REUSEADDR, &listening_opt, sizeof(int));
 	if(res < 0)
 	{
-		LOG_ERROR("Failed to set sockopt SO_REUSEADDR, errno = %d!", errno);
+		TPT_TRACE(TRACE_ERROR, "Failed to set sockopt SO_REUSEADDR, errno = %d!", errno);
 		close(tcpfd);
 		return false;
 	}
@@ -302,7 +308,7 @@ static bool setup_tcp_server(void)
 	res = bind(tcpfd, (struct sockaddr *)&clid_inst.tcp_addr, size);
 	if(res < 0)
 	{
-		LOG_ERROR("Failed to bind, errno = %d!", errno);
+		TPT_TRACE(TRACE_ERROR, "Failed to bind, errno = %d!", errno);
 		close(tcpfd);
 		return false;
 	}
@@ -310,14 +316,14 @@ static bool setup_tcp_server(void)
 	res = listen(tcpfd, MAX_NUM_SHELL_CLIENTS);
 	if(res < 0)
 	{
-		LOG_ERROR("Failed to listen, errno = %d!", errno);
+		TPT_TRACE(TRACE_ERROR, "Failed to listen, errno = %d!", errno);
 		close(tcpfd);
 		return false;
 	}
 
 	clid_inst.tcp_fd = tcpfd;
 
-	LOG_INFO("Setup TCP server successfully on %s:%d", inet_ntoa(clid_inst.tcp_addr.sin_addr), ntohs(clid_inst.tcp_addr.sin_port));
+	TPT_TRACE(TRACE_INFO, "Setup TCP server successfully on %s:%d", inet_ntoa(clid_inst.tcp_addr.sin_addr), ntohs(clid_inst.tcp_addr.sin_port));
 	return true;
 }
 
@@ -334,14 +340,14 @@ static struct in_addr get_ip_address_from_network_interface(int sockfd, char *in
 	int res = ioctl(sockfd, SIOCGIFADDR, (caddr_t)&ifrq, size);
 	if(res < 0)
 	{
-		LOG_ERROR("Failed to ioctl to obtain IP address from %s, errno = %d!", interface, errno);
+		TPT_TRACE(TRACE_ERROR, "Failed to ioctl to obtain IP address from %s, errno = %d!", interface, errno);
 		return sock_addr.sin_addr;
 	}
 
 	size = sizeof(struct sockaddr_in);
 	memcpy(&sock_addr, &(ifrq.ifr_ifru.ifru_addr), size);
 
-	LOG_INFO("Retrieve address from network interface \"%s\" -> tcp://%s:%d", interface, inet_ntoa(sock_addr.sin_addr), sock_addr.sin_port);
+	TPT_TRACE(TRACE_INFO, "Retrieve address from network interface \"%s\" -> tcp://%s:%d", interface, inet_ntoa(sock_addr.sin_addr), sock_addr.sin_port);
 	return sock_addr.sin_addr;
 }
 
@@ -356,23 +362,23 @@ static bool handle_accept_new_connection(int sockfd)
 	{
 		if(errno == EINTR)
 		{
-			LOG_ABN("Accepting connection was interrupted, just ignore it!");
+			TPT_TRACE(TRACE_ABN, "Accepting connection was interrupted, just ignore it!");
 			return true;
 		} else
 		{
-			LOG_ERROR("Accepting connection was destroyed!");
+			TPT_TRACE(TRACE_ERROR, "Accepting connection was destroyed!");
 			return false;
 		}
 	}
 
-	LOG_INFO("Receiving new connection from a peer client tcp://%s:%hu/", inet_ntoa(new_addr.sin_addr), ntohs(new_addr.sin_port));
+	TPT_TRACE(TRACE_INFO, "Receiving new connection from a peer client tcp://%s:%hu/", inet_ntoa(new_addr.sin_addr), ntohs(new_addr.sin_port));
 
 	struct shell_client **iter;
 	iter = tfind(&new_fd, &clid_inst.client_tree, compare_fd_in_client_tree);
 	if(iter != NULL)
 	{
 		/* Already added in tree */
-		LOG_ABN("This fd %d already connected, something wrong!", new_fd);
+		TPT_TRACE(TRACE_ABN, "This fd %d already connected, something wrong!", new_fd);
 		return false;
 	} else
 	{
@@ -389,7 +395,7 @@ static bool handle_accept_new_connection(int sockfd)
 
 		if(i == MAX_NUM_SHELL_CLIENTS)
 		{
-			LOG_ERROR("No more than %d shell client is accepted!", MAX_NUM_SHELL_CLIENTS);
+			TPT_TRACE(TRACE_ERROR, "No more than %d shell client is accepted!", MAX_NUM_SHELL_CLIENTS);
 			return false;
 		}
 	}
@@ -498,16 +504,16 @@ static bool handle_receive_tcp_packet(int sockfd)
 
 	if(size == 0)
 	{
-		LOG_INFO("Shell client from this fd %d just disconnected, remove it from our client list!", sockfd);
+		TPT_TRACE(TRACE_INFO, "Shell client from this fd %d just disconnected, remove it from our client list!", sockfd);
 		if(!release_shell_client_resources(sockfd))
 		{
-			LOG_ERROR("Failed to release_shell_client_resources()!");
+			TPT_TRACE(TRACE_ERROR, "Failed to release_shell_client_resources()!");
 		}
 
 		return true;
 	} else if(size < 0)
 	{
-		LOG_ERROR("Receive data from this shell client failed, fd = %d!", sockfd);
+		TPT_TRACE(TRACE_ERROR, "Receive data from this shell client failed, fd = %d!", sockfd);
 		return false;
 	}
 
@@ -518,27 +524,27 @@ static bool handle_receive_tcp_packet(int sockfd)
 	header->receiver		= ntohl(header->receiver);
 	header->sender			= ntohl(header->sender);
 
-	LOG_INFO("Receiving %d bytes from fd %d", size, sockfd);
-	LOG_INFO("Re-interpret TCP packet: msgno: 0x%08x", header->msgno);
-	LOG_INFO("Re-interpret TCP packet: payloadLen: %u", header->payloadLen);
-	LOG_INFO("Re-interpret TCP packet: protRev: %u", header->protRev);
-	LOG_INFO("Re-interpret TCP packet: receiver: %u", header->receiver);
-	LOG_INFO("Re-interpret TCP packet: sender: %u", header->sender);
+	TPT_TRACE(TRACE_INFO, "Receiving %d bytes from fd %d", size, sockfd);
+	TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: msgno: 0x%08x", header->msgno);
+	TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: payloadLen: %u", header->payloadLen);
+	TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: protRev: %u", header->protRev);
+	TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: receiver: %u", header->receiver);
+	TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: sender: %u", header->sender);
 
 	switch (header->msgno)
 	{
 	case CLID_GET_LIST_CMD_REQUEST:
-		LOG_INFO("Received CLID_GET_LIST_CMD_REQUEST!");
+		TPT_TRACE(TRACE_INFO, "Received CLID_GET_LIST_CMD_REQUEST!");
 		handle_receive_get_list_cmd_request(sockfd, header);
 		break;
 	
 	case CLID_EXE_CMD_REQUEST:
-		LOG_INFO("Received CLID_GET_LIST_CMD_REQUEST!");
+		TPT_TRACE(TRACE_INFO, "Received CLID_GET_LIST_CMD_REQUEST!");
 		handle_receive_exe_cmd_request(sockfd, header);
 		break;
 	
 	default:
-		LOG_ABN("Received unknown TCP packet, drop it!");
+		TPT_TRACE(TRACE_ABN, "Received unknown TCP packet, drop it!");
 		break;
 	}
 
@@ -579,7 +585,7 @@ static bool release_shell_client_resources(int sockfd)
 			iter = tfind(&clid_inst.clients[i].fd, &clid_inst.client_tree, compare_fd_in_client_tree);
 			if(iter == NULL)
 			{
-				LOG_ABN("Disconnected shell client not found in the tree, something wrong!");
+				TPT_TRACE(TRACE_ABN, "Disconnected shell client not found in the tree, something wrong!");
 				return false;
 			}
 
@@ -591,7 +597,7 @@ static bool release_shell_client_resources(int sockfd)
 
 	if(i == MAX_NUM_SHELL_CLIENTS)
 	{
-		LOG_ABN("Disconnected peer not found in server list, something wrong!");
+		TPT_TRACE(TRACE_ABN, "Disconnected peer not found in server list, something wrong!");
 		return false;
 	}
 
@@ -609,15 +615,15 @@ static bool handle_receive_get_list_cmd_request(int sockfd, struct ethtcp_header
 
 	if(size <= 0)
 	{
-		LOG_ERROR("Failed to receive data from this shell client, fd = %d!", sockfd);
+		TPT_TRACE(TRACE_ERROR, "Failed to receive data from this shell client, fd = %d!", sockfd);
 		return false;
 	}
 
 	req = (struct clid_get_list_cmd_request *)rxbuff;
 	req->errorcode = ntohl(req->errorcode);
 
-	LOG_INFO("Receiving %d bytes from fd %d", size, sockfd);
-	LOG_INFO("Re-interpret TCP packet: errorcode: %u", req->errorcode);
+	TPT_TRACE(TRACE_INFO, "Receiving %d bytes from fd %d", size, sockfd);
+	TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: errorcode: %u", req->errorcode);
 
 	if(!send_get_list_cmd_reply(sockfd))
 	{
@@ -638,16 +644,19 @@ static bool handle_receive_exe_cmd_request(int sockfd, struct ethtcp_header *hea
 
 	if(size <= 0)
 	{
-		LOG_ERROR("Failed to receive data from this shell client, fd = %d!", sockfd);
+		TPT_TRACE(TRACE_ERROR, "Failed to receive data from this shell client, fd = %d!", sockfd);
 		return false;
 	}
 
 	req = (struct clid_exe_cmd_request *)rxbuff;
 	req->errorcode = ntohl(req->errorcode);
+	req->timeout = ntohl(req->timeout);
 	req->payload_length = ntohl(req->payload_length);
 
-	LOG_INFO("Receiving %d bytes from fd %d", size, sockfd);
-	LOG_INFO("Re-interpret TCP packet: payload_length: %u", req->payload_length);
+	TPT_TRACE(TRACE_INFO, "Receiving %d bytes from fd %d", size, sockfd);
+	TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: errorcode: %u", req->errorcode);
+	TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: timeout: %u", req->timeout);
+	TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: payload_length: %u", req->payload_length);
 
 	unsigned long offset = 0;
 	uint16_t len = 0;
@@ -655,15 +664,15 @@ static bool handle_receive_exe_cmd_request(int sockfd, struct ethtcp_header *hea
 
 	len = *((uint16_t *)(&req->payload + offset));
 	offset += 2;
-	LOG_INFO("Re-interpret TCP packet: cmd_name_len: %hu", len);
+	TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: cmd_name_len: %hu", len);
 	memcpy(buff, (&req->payload + offset), len);
 	buff[len] = '\0';
 	offset += len;
-	LOG_INFO("Re-interpret TCP packet: cmd_name: %s", buff);
+	TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: cmd_name: %s", buff);
 
 	uint16_t num_args = *((uint16_t *)(&req->payload + offset));
 	offset += 2;
-	LOG_INFO("Re-interpret TCP packet: num_args: %hu", num_args);
+	TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: num_args: %hu", num_args);
 
 	for(int i = 0; i < num_args; i++)
 	{
@@ -673,8 +682,8 @@ static bool handle_receive_exe_cmd_request(int sockfd, struct ethtcp_header *hea
 		memcpy(buff, (&req->payload + offset), len);
 		buff[len] = '\0';
 		offset += len;
-		LOG_INFO("Re-interpret TCP packet: arg_len %d: %hu", i, len);
-		LOG_INFO("Re-interpret TCP packet: arg %d: %s", i, buff);
+		TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: arg_len %d: %hu", i, len);
+		TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: arg %d: %s", i, buff);
 	}
 
 	// TODO: forward to respective mailbox who registered cmds 
@@ -722,7 +731,7 @@ static bool send_get_list_cmd_reply(int sockfd)
 	struct ethtcp_msg *rep = malloc(msg_len);
 	if(rep == NULL)
 	{
-		LOG_ERROR("Failed to malloc locate mbox reply message!");
+		TPT_TRACE(TRACE_ERROR, "Failed to malloc locate mbox reply message!");
 		return false;
 	}
 
@@ -740,12 +749,12 @@ static bool send_get_list_cmd_reply(int sockfd)
 	int res = send(sockfd, rep, msg_len, 0);
 	if(res < 0)
 	{
-		LOG_ERROR("Failed to send CLID_GET_LIST_CMD_REPLY, errno = %d!", errno);
+		TPT_TRACE(TRACE_ERROR, "Failed to send CLID_GET_LIST_CMD_REPLY, errno = %d!", errno);
 		return false;
 	}
 
 	free(rep);
-	LOG_INFO("Sent CLID_GET_LIST_CMD_REPLY successfully!");
+	TPT_TRACE(TRACE_INFO, "Sent CLID_GET_LIST_CMD_REPLY successfully!");
 	return true;
 }
 
@@ -759,7 +768,7 @@ static bool send_exe_cmd_reply(int sockfd)
 	struct ethtcp_msg *rep = malloc(msg_len);
 	if(rep == NULL)
 	{
-		LOG_ERROR("Failed to malloc locate mbox reply message!");
+		TPT_TRACE(TRACE_ERROR, "Failed to malloc locate mbox reply message!");
 		return false;
 	}
 
@@ -777,12 +786,12 @@ static bool send_exe_cmd_reply(int sockfd)
 	int res = send(sockfd, rep, msg_len, 0);
 	if(res < 0)
 	{
-		LOG_ERROR("Failed to send CLID_EXE_CMD_REPLY, errno = %d!", errno);
+		TPT_TRACE(TRACE_ERROR, "Failed to send CLID_EXE_CMD_REPLY, errno = %d!", errno);
 		return false;
 	}
 
 	free(rep);
-	LOG_INFO("Sent CLID_EXE_CMD_REPLY successfully!");
+	TPT_TRACE(TRACE_INFO, "Sent CLID_EXE_CMD_REPLY successfully!");
 	return true;
 }
 

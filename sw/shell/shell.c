@@ -37,6 +37,9 @@
 #define TCP_CLID_PORT		33333
 #define MAX_NUM_REMOTE_HOSTS	255
 #define CHECK_ALIVE_INTERVAL	15
+#define CMD_EXECUTION_TIMEOUT	90 // seconds
+
+
 #define MUTEX_LOCK(lock)								\
 	do										\
 	{										\
@@ -171,18 +174,18 @@ int main(int argc, char* argv[])
 	setup_udp_server();
 	setup_udp_thread();
 
-	printf ("Starting new shell...\n");
-	printf ("\n");
+	printf("Starting new shell...\n");
+	printf("\n");
 
 	int index = 0;
 	while(!m_is_exit)
 	{
 		if(m_is_connected)
 		{
-			printf ("%s:%hu$ ", m_active_remote_ip, TCP_CLID_PORT);
+			printf("%s:%hu$ ", m_active_remote_ip, TCP_CLID_PORT);
 		} else
 		{
-			printf ("local$ ");
+			printf("local$ ");
 		}
 
 		m_buff_len = 0;
@@ -1322,6 +1325,7 @@ static bool send_exe_cmd_request(int sockfd)
 	rep->header.payloadLen 					= htonl(payload_length);
 
 	rep->payload.clid_exe_cmd_request.errorcode		= htonl(CLID_STATUS_OK);
+	rep->payload.clid_exe_cmd_request.timeout		= htonl(CMD_EXECUTION_TIMEOUT);
 	rep->payload.clid_exe_cmd_request.payload_length	= htonl(total_len);
 	memcpy(rep->payload.clid_exe_cmd_request.payload, cmds_buff, total_len);
 

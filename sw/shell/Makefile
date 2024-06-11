@@ -1,25 +1,26 @@
-ROOT_DIR := $(shell git rev-parse --show-toplevel)
-TARGET = shell
-BIN = ./bin
+SHELL_SRC_DIR		:= $(SW_DIR)/shell
 
-CFLAGS = -g -Wall -Werror -Wextra
-CC = gcc
+TARGET_CLISHELL		:= clishell
 
-INC_PATHS	:= \
-		-I$(ROOT_DIR)/sw/common/if
+SHELL_SRCS		=
+SHELL_SRCS		+= shell.c
 
-all: $(BIN)/$(TARGET)
+SHELL_OBJS		:= $(SHELL_SRCS:%.c=$(OBJ_DIR)/%.o)
 
-$(BIN)/$(TARGET): shell.c
-	@mkdir -p $(BIN)
-	@echo "  CC  $(BIN)/$(TARGET)"
-	@$(CC) $(CFLAGS) $(INC_PATHS) -o $@ $<
+SHELL_INCDIR		:= \
+			-I$(SW_DIR)/common/if
 
-run:
-	@$(BIN)/$(TARGET)
+all: $(SHELL_OBJS) $(EXEC_DIR)/$(TARGET_CLISHELL)
 
-val:
-	sudo valgrind --leak-check=yes --leak-check=full --show-leak-kinds=all $(BIN)/$(TARGET)
+# Build target 1 objects
+$(OBJ_DIR)/%.o: $(SHELL_SRC_DIR)/%.c
+	@mkdir -p $(@D)
+	@cd $(<D)
+	@echo "  CC \t\t $@"
+	@$(SELF_CC) $(SELF_CFLAGS) $(SHELL_INCDIR) -o $@ $<
 
-clean:
-	rm -rf $(BIN)
+$(EXEC_DIR)/$(TARGET_CLISHELL): $(SHELL_OBJS)
+	@mkdir -p $(@D)
+	@cd $(<D)
+	@echo "  CCLD \t\t $@"
+	@$(SELF_CC) $^ -o $@

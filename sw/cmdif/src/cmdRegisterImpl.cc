@@ -7,12 +7,13 @@
 
 #include <itc.h>
 #include <itcPubSubIf.h>
+#include <traceIf.h>
 
 #include "cmdRegisterImpl.h"
 #include "cmdJobIf.h"
 #include "cmdTypesIf.h"
 #include "cmdProto.h"
-#include "traceUtils.h"
+
 
 namespace CmdIf
 {
@@ -48,7 +49,8 @@ CmdRegisterIf::ReturnCode CmdRegisterImpl::registerCmdHandler(const std::string&
 	CmdRegisterIf::ReturnCode rc = CmdRegisterIf::ReturnCode::ALREADY_EXISTS;
 	std::unique_lock<std::mutex> lock(m_mutex);
 
-	if(m_registeredInvokers.count(cmdName) == 0)
+	auto iter = m_registeredInvokers.find(cmdName);
+	if(iter == m_registeredInvokers.end())
 	{
 		m_registeredInvokers.emplace(cmdName, std::bind(&invokeCmd, std::placeholders::_1, cmdHandler));
 		lock.unlock();
@@ -65,15 +67,16 @@ CmdRegisterIf::ReturnCode CmdRegisterImpl::registerCmdHandler(const std::string&
 
 		if(!itc_send(&req, m_clidMboxId, ITC_MY_MBOX_ID, NULL))
 		{
-			LOG_ERROR("Failed to send CMDIF_REG_CMD_REQUEST to clid for cmdName = %s!\n", cmdName);
+			TPT_TRACE(TRACE_ERROR, "Failed to send CMDIF_REG_CMD_REQUEST to clid for cmdName = %s!", cmdName);
 			return;
 		}
 
-		LOG_INFO("Send CMDIF_REG_CMD_REQUEST to clid successfully!\n");
+		TPT_TRACE(TRACE_INFO, "Send CMDIF_REG_CMD_REQUEST to clid successfully!");
 
 		rc = CmdRegisterIf::ReturnCode::NORMAL;
 	}
 
+	TPT_TRACE(TRACE_ABN, "Command name %s already exists!", cmdName);
 	return rc;
 }
 
@@ -100,26 +103,27 @@ CmdRegisterIf::ReturnCode CmdRegisterImpl::deregisterCmdHandler(const std::strin
 
 		if(!itc_send(&req, m_clidMboxId, ITC_MY_MBOX_ID, NULL))
 		{
-			LOG_ERROR("Failed to send CMDIF_DEREG_CMD_REQUEST to clid for cmdName = %s!\n", cmdName);
+			TPT_TRACE(TRACE_ERROR, "Failed to send CMDIF_DEREG_CMD_REQUEST to clid for cmdName = %s!", cmdName);
 			return;
 		}
 
-		LOG_INFO("Send CMDIF_DEREG_CMD_REQUEST to clid successfully!\n");
+		TPT_TRACE(TRACE_INFO, "Send CMDIF_DEREG_CMD_REQUEST to clid successfully!");
 
 		rc = CmdRegisterIf::ReturnCode::NORMAL;
 	}
 
+	TPT_TRACE(TRACE_ABN, "Command name %s not found!", cmdName);
 	return rc;
 }
 
 void CmdRegisterImpl::init()
 {
-	LOG_INFO("CmdRegisterIf initializing...\n");
+	TPT_TRACE(TRACE_INFO, "CmdRegisterIf initializing...");
 
-	m_clidMboxId = itc_locate_sync(1000, m_clidMboxName.c_str(), true, NULL, NULL);
+	m_clidMboxId = itc_locate_sync(ITC_NO_WAIT, m_clidMboxName.c_str(), true, NULL, NULL);
 	if(m_clidMboxId == ITC_NO_MBOX_ID)
 	{
-		LOG_ERROR("Failed to locate %s even after 1000ms!\n", m_clidMboxName);
+		TPT_TRACE(TRACE_ERROR, "Failed to locate %s!", m_clidMboxName);
 		return;
 	}
 
@@ -131,7 +135,7 @@ void CmdRegisterImpl::init()
 
 void CmdRegisterImpl::invokeCmd(const std::shared_ptr<CmdIf::V1::CmdJobIf>& job, const CmdRegisterIf::CmdHandler& cmdHandler)
 {
-	LOG_INFO("Invoking cmd handler: %s\n", job->getCmdName());
+	TPT_TRACE(TRACE_INFO, "Invoking cmd handler: %s", job->getCmdName());
 	cmdHandler(job);
 }
 

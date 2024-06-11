@@ -1,12 +1,14 @@
 #include <vector>
 #include <string>
 #include <cstring>
+
 #include <itc.h>
+#include <traceIf.h>
 
 #include "cmdJobImpl.h"
 #include "cmdTypesIf.h"
 #include "cmdProto.h"
-#include "traceUtils.h"
+
 
 namespace CmdIf
 {
@@ -40,7 +42,7 @@ void CmdJobImpl::done(const CmdIf::V1::CmdTypesIf::CmdResultCode& rc)
 		result = CMDIF_RET_FAIL;
 	} else
 	{
-		LOG_ERROR("Unknown CmdResultCode rc = %d!\n", rc);
+		TPT_TRACE(TRACE_ERROR, "Unknown CmdResultCode rc = %d!", rc);
 		return;
 	}
 
@@ -52,11 +54,11 @@ void CmdJobImpl::done(const CmdIf::V1::CmdTypesIf::CmdResultCode& rc)
 
 	if(!itc_send(&rep, m_clidMboxId, ITC_MY_MBOX_ID, NULL))
 	{
-		LOG_ERROR("Failed to send CMDIF_EXE_CMD_REPLY to clid for cmdName = %s!\n", m_cmdName);
+		TPT_TRACE(TRACE_ERROR, "Failed to send CMDIF_EXE_CMD_REPLY to clid for cmdName = %s!", m_cmdName);
 		return;
 	}
 
-	LOG_INFO("Send CMDIF_EXE_CMD_REPLY to clid successfully!\n");
+	TPT_TRACE(TRACE_INFO, "Send CMDIF_EXE_CMD_REPLY to clid successfully!");
 }
 
 } // V1

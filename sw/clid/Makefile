@@ -1,25 +1,34 @@
-ROOT_DIR := $(shell git rev-parse --show-toplevel)
-TARGET = clid
-BIN = ./bin
+CLID_SRC_DIR		:= $(SW_DIR)/clid
 
-CFLAGS = -g -Wall -Werror -Wextra
-CC = gcc
+TARGET_CLID_W_LIBAR	:= clid_ar
+TARGET_CLID_W_LIBSO	:= clid_so
 
-INC_PATHS	:= \
-		-I$(ROOT_DIR)/sw/common/if
+CLID_SRCS		=
+CLID_SRCS		+= clid.c
 
-all: $(BIN)/$(TARGET)
+CLID_OBJS		:= $(CLID_SRCS:%.c=$(OBJ_DIR)/%.o)
 
-$(BIN)/$(TARGET): clid.c
-	@mkdir -p $(BIN)
-	@echo "  CC  $(BIN)/$(TARGET)"
-	@$(CC) $(CFLAGS) $(INC_PATHS) -o $@ $<
+CLID_INCDIR		:= \
+			-I$(SW_DIR)/common/if \
+			-I$(SDK_INC_DIR)
 
-run:
-	@$(BIN)/$(TARGET)
+all: $(CLID_OBJS) $(EXEC_DIR)/$(TARGET_CLID_W_LIBAR) $(EXEC_DIR)/$(TARGET_CLID_W_LIBSO)
 
-val:
-	sudo valgrind --leak-check=yes --leak-check=full --show-leak-kinds=all $(BIN)/$(TARGET)
+# Build target 1 objects
+$(OBJ_DIR)/%.o: $(CLID_SRC_DIR)/%.c
+	@mkdir -p $(@D)
+	@cd $(<D)
+	@echo "  CC \t\t $@"
+	@$(SELF_CC) $(SELF_CFLAGS) $(CLID_INCDIR) -o $@ $<
 
-clean:
-	rm -rf $(BIN)
+$(EXEC_DIR)/$(TARGET_CLID_W_LIBAR): $(CLID_OBJS)
+	@mkdir -p $(@D)
+	@cd $(<D)
+	@echo "  CCLD \t\t $@"
+	@$(SELF_CC) $^ -L$(SDK_LIB_DIR) -litca -ltraceifa -o $@
+
+$(EXEC_DIR)/$(TARGET_CLID_W_LIBSO): $(CLID_OBJS)
+	@mkdir -p $(@D)
+	@cd $(<D)
+	@echo "  CCLD \t\t $@"
+	@$(SELF_CC) $^ -L$(SDK_LIB_DIR) -litc -ltraceif -o $@

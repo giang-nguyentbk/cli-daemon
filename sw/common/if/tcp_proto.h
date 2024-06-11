@@ -61,6 +61,7 @@ struct clid_get_list_cmd_reply {
 struct clid_exe_cmd_request {
 	// uint32_t	payload_startpoint;
 	uint32_t	errorcode;
+	uint32_t	timeout; // in seconds
 	uint32_t	payload_length;
 	char		payload[1];
 	/* Format:
