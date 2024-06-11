@@ -10,6 +10,7 @@ CLID_OBJS		:= $(CLID_SRCS:%.c=$(OBJ_DIR)/%.o)
 
 CLID_INCDIR		:= \
 			-I$(SW_DIR)/common/if \
+			-I$(SW_DIR)/cmdif/inc \
 			-I$(SDK_INC_DIR)
 
 all: $(CLID_OBJS) $(EXEC_DIR)/$(TARGET_CLID_W_LIBAR) $(EXEC_DIR)/$(TARGET_CLID_W_LIBSO)

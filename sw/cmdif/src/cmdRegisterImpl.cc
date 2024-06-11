@@ -44,7 +44,7 @@ void CmdRegisterImpl::reset()
 	m_registeredInvokers.clear();
 }
 
-CmdRegisterIf::ReturnCode CmdRegisterImpl::registerCmdHandler(const std::string& cmdName, const CmdHandler& cmdHandler)
+CmdRegisterIf::ReturnCode CmdRegisterImpl::registerCmdHandler(const std::string& cmdName, const std::string& cmdDesc, const CmdHandler& cmdHandler)
 {
 	CmdRegisterIf::ReturnCode rc = CmdRegisterIf::ReturnCode::ALREADY_EXISTS;
 	std::unique_lock<std::mutex> lock(m_mutex);
@@ -55,9 +55,19 @@ CmdRegisterIf::ReturnCode CmdRegisterImpl::registerCmdHandler(const std::string&
 		m_registeredInvokers.emplace(cmdName, std::bind(&invokeCmd, std::placeholders::_1, cmdHandler));
 		lock.unlock();
 
-		union itc_msg* req = itc_alloc(offsetof(struct CmdIfRegCmdRequestS, payload), CMDIF_REG_CMD_REQUEST);
-		req->cmdIfRegCmdRequest.payloadLen = cmdName.length();
-		std::memcpy(req->cmdIfRegCmdRequest.payload, cmdName.c_str(), cmdName.length());
+		union itc_msg* req = itc_alloc(offsetof(struct CmdIfRegCmdRequestS, cmd_desc) + cmdDesc.length() + 1, CMDIF_REG_CMD_REQUEST);
+		req->cmdIfRegCmdRequest.mailbox_id = itc_current_mbox();
+
+		if(cmdName.length() < MAX_CMD_NAME_LENGTH)
+		{
+			std::memcpy(req->cmdIfRegCmdRequest.cmd_name, cmdName.c_str(), cmdName.length() + 1);
+		} else
+		{
+			// Reserve 1 byte for '\0'
+			std::memcpy(req->cmdIfRegCmdRequest.cmd_name, cmdName.substr(0, MAX_CMD_NAME_LENGTH - 1).c_str(), MAX_CMD_NAME_LENGTH);
+		}
+
+		std::memcpy(req->cmdIfRegCmdRequest.cmd_desc, cmdDesc.c_str(), cmdDesc.length() + 1);
 
 		if(m_clidMboxId == ITC_NO_MBOX_ID)
 		{
@@ -91,9 +101,16 @@ CmdRegisterIf::ReturnCode CmdRegisterImpl::deregisterCmdHandler(const std::strin
 		m_registeredInvokers.erase(cmdName);
 		lock.unlock();
 
-		union itc_msg* req = itc_alloc(offsetof(struct CmdIfDeregCmdRequestS, payload), CMDIF_DEREG_CMD_REQUEST);
-		req->cmdIfDeregCmdRequest.payloadLen = cmdName.length();
-		std::memcpy(req->cmdIfDeregCmdRequest.payload, cmdName.c_str(), cmdName.length());
+		union itc_msg* req = itc_alloc(offsetof(struct CmdIfDeregCmdRequestS, cmd_name), CMDIF_DEREG_CMD_REQUEST);
+		
+		if(cmdName.length() < MAX_CMD_NAME_LENGTH)
+		{
+			std::memcpy(req->cmdIfDeregCmdRequest.cmd_name, cmdName.c_str(), cmdName.length() + 1);
+		} else
+		{
+			// Reserve 1 byte for '\0'
+			std::memcpy(req->cmdIfDeregCmdRequest.cmd_name, cmdName.substr(0, MAX_CMD_NAME_LENGTH - 1).c_str(), MAX_CMD_NAME_LENGTH);
+		}
 
 		if(m_clidMboxId == ITC_NO_MBOX_ID)
 		{
@@ -128,8 +145,6 @@ void CmdRegisterImpl::init()
 	}
 
 	IItcPubSub& itcPubSub = IItcPubSub::getInstance();
-	itcPubSub.registerMsg(CMDIF_REG_CMD_REPLY, std::bind(&handleRegCmdListReply, this, std::placeholders::_1));
-	itcPubSub.registerMsg(CMDIF_DEREG_CMD_REPLY, std::bind(&handleDeregCmdListReply, this, std::placeholders::_1));
 	itcPubSub.registerMsg(CMDIF_EXE_CMD_REQUEST, std::bind(&handleExeCmdRequest, this, std::placeholders::_1));
 }
 
@@ -137,16 +152,6 @@ void CmdRegisterImpl::invokeCmd(const std::shared_ptr<CmdIf::V1::CmdJobIf>& job,
 {
 	TPT_TRACE(TRACE_INFO, "Invoking cmd handler: %s", job->getCmdName());
 	cmdHandler(job);
-}
-
-void CmdRegisterImpl::handleRegCmdListReply(const std::shared_ptr<union itc_msg>& msg)
-{
-
-}
-
-void CmdRegisterImpl::handleDeregCmdListReply(const std::shared_ptr<union itc_msg>& msg)
-{
-
 }
 
 void CmdRegisterImpl::handleExeCmdRequest(const std::shared_ptr<union itc_msg>& msg)

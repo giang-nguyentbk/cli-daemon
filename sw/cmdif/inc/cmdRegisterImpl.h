@@ -43,7 +43,7 @@ public:
 	CmdRegisterImpl& operator=(const CmdRegisterImpl&) 	= delete;
 	CmdRegisterImpl& operator=(CmdRegisterImpl&&) 		= delete;
 
-	ReturnCode registerCmdHandler(const std::string& cmdName, const CmdHandler& cmdHandler) override;
+	ReturnCode registerCmdHandler(const std::string& cmdName, const std::string& cmdDesc, const CmdHandler& cmdHandler) override;
 	ReturnCode deregisterCmdHandler(const std::string& cmdName) override;
 
 private:
