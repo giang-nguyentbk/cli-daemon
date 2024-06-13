@@ -33,7 +33,7 @@
 #define MAX_CMD_NAME_LENGTH	32
 #define NET_INTERFACE_ETH0	"eth0"
 #define CLID_LOG_FILENAME	"clid.log"
-#define CLID_MBOX_NAME		"clid_mailbox"
+#define CLID_MBOX_NAME		"clidMailbox"
 
 
 struct shell_client {
@@ -65,7 +65,7 @@ struct clid_instance {
 *****                          INTERNAL VARIABLES                          *****
 *******************************************************************************/
 static struct clid_instance clid_inst;
-static unsigned long long job_id = 0; // global job id, each requested cmd execution from a shell client has a unique job_id (count up to max of unsigned long long)
+static unsigned long long m_job_id = 0; // global job id, each requested cmd execution from a shell client has a unique job_id (count up to max of unsigned long long)
 
 
 /*****************************************************************************\/
@@ -80,6 +80,8 @@ static bool setup_tcp_server(void);
 static struct in_addr get_ip_address_from_network_interface(int sockfd, char *interface);
 static bool handle_accept_new_connection(int sockfd);
 static int compare_fd_in_client_tree(const void *pa, const void *pb);
+static int compare_timerfd_in_client_tree(const void *pa, const void *pb);
+static int compare_jobid_in_client_tree(const void *pa, const void *pb);
 static int compare_client_in_client_tree(const void *pa, const void *pb);
 static bool setup_shell_clients(void);
 static bool setup_command_list(void);
@@ -90,16 +92,20 @@ static bool handle_receive_get_list_cmd_request(int sockfd, struct ethtcp_header
 static bool handle_receive_exe_cmd_request(int sockfd, struct ethtcp_header *header);
 static void do_nothing(void *tree_node_data);
 static bool send_get_list_cmd_reply(int sockfd);
-// static bool send_exe_cmd_reply(int sockfd);
+static bool send_exe_cmd_reply(int sockfd, uint32_t result, char *output);
 static bool restart_job_timer(int sockfd, time_t timeout);
 static bool set_time_job_timer(int timerfd, time_t timeout);
-// static bool is_job_timer_running(int timerfd);
+static bool is_job_timer_running(int timerfd);
 static bool reassign_current_job_id(int sockfd, unsigned long long new_job_id);
 static bool handle_receive_itc_msg(int mbox_fd);
 static bool handle_receive_reg_cmd_request(union itc_msg *msg);
 static int compare_cmdname_in_cmd_tree(const void *pa, const void *pb);
 static int compare_command_in_cmd_tree(const void *pa, const void *pb);
 static bool handle_receive_dereg_cmd_request(union itc_msg *msg);
+static bool forward_exe_cmd_request(unsigned long long job_id, char *cmd_name, uint16_t num_args, uint32_t pl_len, char *pl);
+static bool handle_receive_exe_cmd_reply(union itc_msg *msg);
+static bool handle_job_timer_expired(int timerfd);
+
 
 
 
@@ -178,6 +184,12 @@ int main(int argc, char* argv[])
 			{
 				FD_SET(clid_inst.clients[i].fd, &fdset);
 				max_fd = MAX_OF(clid_inst.clients[i].fd, max_fd);
+
+				if(clid_inst.clients[i].job_timer_fd != -1 && is_job_timer_running(clid_inst.clients[i].job_timer_fd))
+				{
+					FD_SET(clid_inst.clients[i].job_timer_fd, &fdset);
+					max_fd = MAX_OF(clid_inst.clients[i].job_timer_fd, max_fd);
+				}
 			}
 		}
 
@@ -208,13 +220,25 @@ int main(int argc, char* argv[])
 
 		for(int i = 0; i < MAX_NUM_SHELL_CLIENTS; i++)
 		{
-			if(clid_inst.clients[i].fd != -1 && FD_ISSET(clid_inst.clients[i].fd, &fdset))
+			if(clid_inst.clients[i].fd != -1)
 			{
-				if(handle_receive_tcp_packet(clid_inst.clients[i].fd) == false)
+				if(clid_inst.clients[i].job_timer_fd != -1 && FD_ISSET(clid_inst.clients[i].job_timer_fd, &fdset))
 				{
-					TPT_TRACE(TRACE_ERROR, "Failed to handle_accept_new_connection()!");
-					exit(EXIT_FAILURE);
+					if(handle_job_timer_expired(clid_inst.clients[i].job_timer_fd) == false)
+					{
+						TPT_TRACE(TRACE_ERROR, "Failed to handle_job_timer_expired()!");
+						exit(EXIT_FAILURE);
+					}
 				}
+
+				if(FD_ISSET(clid_inst.clients[i].fd, &fdset))
+				{
+					if(handle_receive_tcp_packet(clid_inst.clients[i].fd) == false)
+					{
+						TPT_TRACE(TRACE_ERROR, "Failed to handle_accept_new_connection()!");
+						exit(EXIT_FAILURE);
+					}
+				}				
 			}
 		}
 	}
@@ -437,6 +461,40 @@ static int compare_fd_in_client_tree(const void *pa, const void *pb)
 	}
 }
 
+static int compare_timerfd_in_client_tree(const void *pa, const void *pb)
+{
+	const int *timerfd = pa;
+	const struct shell_client *client = pb;
+
+	if(*timerfd == client->job_timer_fd)
+	{
+		return 0;
+	} else if(*timerfd > client->job_timer_fd)
+	{
+		return 1;
+	} else
+	{
+		return -1;
+	}
+}
+
+static int compare_jobid_in_client_tree(const void *pa, const void *pb)
+{
+	const unsigned long long *job_id = pa;
+	const struct shell_client *client = pb;
+
+	if(*job_id == client->current_job_id)
+	{
+		return 0;
+	} else if(*job_id > client->current_job_id)
+	{
+		return 1;
+	} else
+	{
+		return -1;
+	}
+}
+
 static int compare_client_in_client_tree(const void *pa, const void *pb)
 {
 	const struct shell_client *client_a = pa;
@@ -476,6 +534,7 @@ static bool setup_shell_clients(void)
 	{
 		clid_inst.clients[i].fd = -1;
 		clid_inst.clients[i].job_timer_fd = -1;
+		clid_inst.clients[i].current_job_id = 0;
 	}
 
 	return true;
@@ -607,6 +666,8 @@ static bool release_shell_client_resources(int sockfd)
 	close((*iter)->job_timer_fd);
 	(*iter)->job_timer_fd = -1;
 
+	(*iter)->current_job_id = 0;
+
 	tdelete(*iter, &clid_inst.client_tree, compare_client_in_client_tree);
 
 	return true;
@@ -667,35 +728,40 @@ static bool handle_receive_exe_cmd_request(int sockfd, struct ethtcp_header *hea
 	TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: payload_length: %u", req->payload_length);
 
 	unsigned long offset = 0;
-	uint16_t len = 0;
-	char buff[MAX_CMD_NAME_LENGTH];
+	uint16_t cmd_name_len = 0;
+	char cmd_name[MAX_CMD_NAME_LENGTH];
 
-	len = *((uint16_t *)(&req->payload + offset));
+	cmd_name_len = *((uint16_t *)(&req->payload + offset));
 	offset += 2;
-	TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: cmd_name_len: %hu", len);
-	memcpy(buff, (&req->payload + offset), len);
-	buff[len] = '\0';
-	offset += len;
-	TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: cmd_name: %s", buff);
+	TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: cmd_name_len: %hu", cmd_name_len);
+	memcpy(cmd_name, (&req->payload + offset), cmd_name_len);
+	cmd_name[cmd_name_len] = '\0';
+	offset += cmd_name_len;
+	TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: cmd_name: %s", cmd_name);
 
 	uint16_t num_args = *((uint16_t *)(&req->payload + offset));
 	offset += 2;
 	TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: num_args: %hu", num_args);
 
+	/* DEBUG PURPOSE ONLY */
+	uint16_t arg_len = 0;
+	char arg[MAX_CMD_NAME_LENGTH];
 	for(int i = 0; i < num_args; i++)
 	{
 		/* This is arguments */
-		len = *((uint16_t *)(&req->payload + offset));
+		arg_len = *((uint16_t *)(&req->payload + offset));
 		offset += 2;
-		memcpy(buff, (&req->payload + offset), len);
-		buff[len] = '\0';
-		offset += len;
-		TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: arg_len %d: %hu", i, len);
-		TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: arg %d: %s", i, buff);
+		memcpy(arg, (&req->payload + offset), arg_len);
+		arg[arg_len] = '\0';
+		offset += arg_len;
+		TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: arg_len %d: %hu", i, arg_len);
+		TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: arg %d: %s", i, arg);
 	}
 
 	// Prepare a new job_id assigned to this execution
-	unsigned long long new_job_id = ++job_id;
+	// Prevent from the case unsigned long long is overflowed, jump from maxof(unsigned long long) to 1 directly.
+	// Value of 0 indicates current client has no job execution running, in idle state.
+	unsigned long long new_job_id = ++m_job_id ? m_job_id : ++m_job_id;
 
 	// Restart job_timer for this shell client
 	if(!restart_job_timer(sockfd, (time_t)req->timeout))
@@ -711,14 +777,12 @@ static bool handle_receive_exe_cmd_request(int sockfd, struct ethtcp_header *hea
 	}
 
 	// TODO: forward to respective mailbox who registered cmds
+	if(!forward_exe_cmd_request(new_job_id, cmd_name, num_args, req->payload_length, req->payload))
+	{
+		return false;
+	}
 
-
-	TPT_TRACE(TRACE_INFO, "Forward new job execution to mailbox id = 0x%08x, sockfd = %d, job_id = %llu", sockfd, new_job_id);
-
-	// if(!send_exe_cmd_reply(sockfd))
-	// {
-	// 	return false;
-	// }
+	TPT_TRACE(TRACE_INFO, "Forward new job execution sockfd = %d, job_id = %llu", sockfd, new_job_id);
 	
 	return true;
 }
@@ -785,86 +849,81 @@ static bool send_get_list_cmd_reply(int sockfd)
 	return true;
 }
 
-// static bool send_exe_cmd_reply(int sockfd)
-// {
-// 	char cmd_output[512];
-// 	strcpy(cmd_output, "This is a notification toward user notifying that the command was executing successfully!");
-// 	uint32_t total_len = strlen(cmd_output);
+static bool send_exe_cmd_reply(int sockfd, uint32_t result, char *output)
+{
+	/* MOCK PURPOSE ONLY */
+	// char cmd_output[512];
+	// strcpy(cmd_output, "This is a notification toward user notifying that the command was executing successfully!");
+	// uint32_t output_len = strlen(cmd_output);
 
-// 	size_t msg_len = offsetof(struct ethtcp_msg, payload) + offsetof(struct clid_exe_cmd_reply, payload) + total_len;
-// 	struct ethtcp_msg *rep = malloc(msg_len);
-// 	if(rep == NULL)
-// 	{
-// 		TPT_TRACE(TRACE_ERROR, "Failed to malloc locate mbox reply message!");
-// 		return false;
-// 	}
+	uint32_t output_len = strlen(output);
 
-// 	uint32_t payload_length = offsetof(struct clid_exe_cmd_reply, payload) + total_len;
-// 	rep->header.sender 					= htonl((uint32_t)getpid());
-// 	rep->header.receiver 					= htonl(111);
-// 	rep->header.protRev 					= htonl(15);
-// 	rep->header.msgno 					= htonl(CLID_EXE_CMD_REPLY);
-// 	rep->header.payloadLen 					= htonl(payload_length);
+	size_t msg_len = offsetof(struct ethtcp_msg, payload) + offsetof(struct clid_exe_cmd_reply, payload) + output_len;
+	struct ethtcp_msg *rep = malloc(msg_len);
+	if(rep == NULL)
+	{
+		TPT_TRACE(TRACE_ERROR, "Failed to malloc locate mbox reply message!");
+		return false;
+	}
 
-// 	rep->payload.clid_exe_cmd_reply.errorcode		= htonl(CLID_STATUS_OK);
-// 	rep->payload.clid_exe_cmd_reply.payload_length		= htonl(total_len);
-// 	memcpy(rep->payload.clid_exe_cmd_reply.payload, cmd_output, total_len);
+	uint32_t payload_length = offsetof(struct clid_exe_cmd_reply, payload) + output_len + 1;
+	rep->header.sender 					= htonl((uint32_t)getpid());
+	rep->header.receiver 					= htonl(111);
+	rep->header.protRev 					= htonl(15);
+	rep->header.msgno 					= htonl(CLID_EXE_CMD_REPLY);
+	rep->header.payloadLen 					= htonl(payload_length);
 
-// 	int res = send(sockfd, rep, msg_len, 0);
-// 	if(res < 0)
-// 	{
-// 		TPT_TRACE(TRACE_ERROR, "Failed to send CLID_EXE_CMD_REPLY, errno = %d!", errno);
-// 		return false;
-// 	}
+	rep->payload.clid_exe_cmd_reply.errorcode		= htonl(CLID_STATUS_OK);
+	rep->payload.clid_exe_cmd_reply.result			= htonl(result);
+	rep->payload.clid_exe_cmd_reply.payload_length		= htonl(output_len + 1);
+	memcpy(rep->payload.clid_exe_cmd_reply.payload, output, output_len + 1);
 
-// 	free(rep);
-// 	TPT_TRACE(TRACE_INFO, "Sent CLID_EXE_CMD_REPLY successfully!");
-// 	return true;
-// }
+	int res = send(sockfd, rep, msg_len, 0);
+	if(res < 0)
+	{
+		TPT_TRACE(TRACE_ERROR, "Failed to send CLID_EXE_CMD_REPLY, errno = %d!", errno);
+		return false;
+	}
+
+	free(rep);
+	TPT_TRACE(TRACE_INFO, "Sent CLID_EXE_CMD_REPLY successfully!");
+	return true;
+}
 
 static bool restart_job_timer(int sockfd, time_t timeout)
 {
-	int i = 0;
-	for(; i < MAX_NUM_SHELL_CLIENTS; i++)
+	struct shell_client **iter;
+	iter = tfind(&sockfd, &clid_inst.client_tree, compare_fd_in_client_tree);
+	if(iter == NULL)
 	{
-		if(clid_inst.clients[i].fd == sockfd)
-		{
-			if(clid_inst.clients[i].job_timer_fd <= 0)
-			{
-				// The first job for this shell client
-				TPT_TRACE(TRACE_INFO, "Starting the first job for this shell client, sockfd = %d", sockfd);
-				clid_inst.clients[i].job_timer_fd = timerfd_create(CLOCK_REALTIME, TFD_NONBLOCK | TFD_CLOEXEC);
-				if(clid_inst.clients[i].job_timer_fd < 0)
-				{
-					TPT_TRACE(TRACE_ERROR, "Failed to timerfd_create(), errno = %d!", errno);
-					return false;
-				}
-
-				;
-			}
-
-			// Whether either one of two scenarios below happens, do a same thing.
-
-			// 1. There is another job for this client still running, skip it.
-			// When job results of the discarded job sent back to clid daemon from application threads just discard it
-			// because current_job_id for this shell client should be changed by the caller of this function,
-			// The shell client did not need the discarded job anymore (probably they press Ctrl-C and send us this new job).
-
-			// 2. No job is running for this shell client, set new timeout for the job_timer
-
-			if(!set_time_job_timer(clid_inst.clients[i].job_timer_fd, timeout))
-			{
-				TPT_TRACE(TRACE_ERROR, "Could not start job timer for this shell client sockfd = %d!", sockfd);
-				return false;
-			}
-
-			break;
-		}
+		TPT_TRACE(TRACE_ABN, "This fd %d not found in client tree, something wrong!", sockfd);
+		return false;
 	}
 
-	if(i == MAX_NUM_SHELL_CLIENTS)
+	if((*iter)->job_timer_fd <= 0)
 	{
-		TPT_TRACE(TRACE_ABN, "Shell client with sockfd = %d not found, maybe shell clien has just disconnected!", sockfd);
+		// The first job for this shell client
+		TPT_TRACE(TRACE_INFO, "Starting the first job for this shell client, sockfd = %d", sockfd);
+		(*iter)->job_timer_fd = timerfd_create(CLOCK_REALTIME, TFD_NONBLOCK | TFD_CLOEXEC);
+		if((*iter)->job_timer_fd < 0)
+		{
+			TPT_TRACE(TRACE_ERROR, "Failed to timerfd_create(), errno = %d!", errno);
+			return false;
+		}
+
+		;
+	}
+
+	// Whether either one of two scenarios below happens, do a same thing.
+	// 1. There is another job for this client still running, skip it.
+	// When job results of the discarded job sent back to clid daemon from application threads just discard it
+	// because current_job_id for this shell client should be changed by the caller of this function,
+	// The shell client did not need the discarded job anymore (probably they press Ctrl-C and send us this new job).
+	// 2. No job is running for this shell client, set new timeout for the job_timer
+
+	if(!set_time_job_timer((*iter)->job_timer_fd, timeout))
+	{
+		TPT_TRACE(TRACE_ERROR, "Could not start job timer for this shell client sockfd = %d!", sockfd);
 		return false;
 	}
 
@@ -891,44 +950,38 @@ static bool set_time_job_timer(int timerfd, time_t timeout)
 	return true;
 }
 
-// static bool is_job_timer_running(int timerfd)
-// {
-// 	struct itimerspec remaining_time;
+static bool is_job_timer_running(int timerfd)
+{
+	struct itimerspec remaining_time;
 
-// 	int res = timerfd_gettime(timerfd, &remaining_time);
-// 	if(res < 0)
-// 	{
-// 		TPT_TRACE(TRACE_ERROR, "Failed to timerfd_gettime(), errno = %d!", errno);
-// 		return false;
-// 	}
+	int res = timerfd_gettime(timerfd, &remaining_time);
+	if(res < 0)
+	{
+		TPT_TRACE(TRACE_ERROR, "Failed to timerfd_gettime(), errno = %d!", errno);
+		return false;
+	}
 
-// 	TPT_TRACE(TRACE_INFO, "Job timer for timerfd %d will expire in: %ld.%ld seconds!", timerfd, remaining_time.it_value.tv_sec, remaining_time.it_value.tv_nsec / 1000000);
+	TPT_TRACE(TRACE_INFO, "Job timer for timerfd %d will expire in: %ld.%ld seconds!", timerfd, remaining_time.it_value.tv_sec, remaining_time.it_value.tv_nsec / 1000000);
 
-// 	if(remaining_time.it_value.tv_sec == 0 && remaining_time.it_value.tv_nsec == 0)
-// 	{
-// 		return false;
-// 	}
+	if(remaining_time.it_value.tv_sec == 0 && remaining_time.it_value.tv_nsec == 0)
+	{
+		return false;
+	}
 
-// 	return true;
-// }
+	return true;
+}
 
 static bool reassign_current_job_id(int sockfd, unsigned long long new_job_id)
 {
-	int i = 0;
-	for(; i < MAX_NUM_SHELL_CLIENTS; i++)
+	struct shell_client **iter;
+	iter = tfind(&sockfd, &clid_inst.client_tree, compare_fd_in_client_tree);
+	if(iter == NULL)
 	{
-		if(clid_inst.clients[i].fd == sockfd)
-		{
-			clid_inst.clients[i].current_job_id = new_job_id;
-			break;
-		}
-	}
-
-	if(i == MAX_NUM_SHELL_CLIENTS)
-	{
-		TPT_TRACE(TRACE_ABN, "Shell client with sockfd = %d not found, maybe shell clien has just disconnected!", sockfd);
+		TPT_TRACE(TRACE_ABN, "This fd %d not found in client tree, something wrong!", sockfd);
 		return false;
 	}
+
+	(*iter)->current_job_id = new_job_id;
 
 	return true;
 }
@@ -949,7 +1002,6 @@ static bool handle_receive_itc_msg(int mbox_fd)
 	switch (msg->msgno)
 	{
 	case CMDIF_REG_CMD_REQUEST:
-		TPT_TRACE(TRACE_INFO, "Received CMDIF_REG_CMD_REQUEST mailbox_id = %u", msg->cmdIfRegCmdRequest.mailbox_id);
 		TPT_TRACE(TRACE_INFO, "Received CMDIF_REG_CMD_REQUEST cmd_name = %s", msg->cmdIfRegCmdRequest.cmd_name);
 		TPT_TRACE(TRACE_INFO, "Received CMDIF_REG_CMD_REQUEST cmd_desc = %s", msg->cmdIfRegCmdRequest.cmd_desc);
 		handle_receive_reg_cmd_request(msg);
@@ -958,6 +1010,11 @@ static bool handle_receive_itc_msg(int mbox_fd)
 	case CMDIF_DEREG_CMD_REQUEST:
 		TPT_TRACE(TRACE_INFO, "Received CMDIF_DEREG_CMD_REQUEST cmd_name = %s", msg->cmdIfDeregCmdRequest.cmd_name);
 		handle_receive_dereg_cmd_request(msg);
+		break;
+
+	case CMDIF_EXE_CMD_REPLY:
+		TPT_TRACE(TRACE_INFO, "Received CMDIF_EXE_CMD_REPLY output = %s", msg->cmdIfExeCmdReply.output);
+		handle_receive_exe_cmd_reply(msg);
 		break;
 
 	default:
@@ -975,8 +1032,7 @@ static bool handle_receive_reg_cmd_request(union itc_msg *msg)
 	iter = tfind(msg->cmdIfRegCmdRequest.cmd_name, &clid_inst.cmd_tree, compare_cmdname_in_cmd_tree);
 	if(iter != NULL)
 	{
-		/* Already added in tree -> double retrister, just skip */
-		TPT_TRACE(TRACE_ABN, "This cmdName %s already registered, something abnormal!", msg->cmdIfRegCmdRequest.cmd_name);
+		TPT_TRACE(TRACE_ABN, "This cmdName %s already registered by mailbox id 0x%08x, something abnormal!", msg->cmdIfRegCmdRequest.cmd_name, (*iter)->mbox_id);
 		return true;
 	}
 
@@ -985,7 +1041,7 @@ static bool handle_receive_reg_cmd_request(union itc_msg *msg)
 	{
 		if(clid_inst.cmds[i].cmd_name[0] == '\0')
 		{
-			clid_inst.cmds[i].mbox_id = msg->cmdIfRegCmdRequest.mailbox_id;
+			clid_inst.cmds[i].mbox_id = itc_sender(msg);
 			strcpy(clid_inst.cmds[i].cmd_name, msg->cmdIfRegCmdRequest.cmd_name);
 			strcpy(clid_inst.cmds[i].cmd_desc, msg->cmdIfRegCmdRequest.cmd_desc);
 			tsearch(&clid_inst.cmds[i], &clid_inst.cmd_tree, compare_command_in_cmd_tree);
@@ -1020,6 +1076,101 @@ static bool handle_receive_dereg_cmd_request(union itc_msg *msg)
 
 	return true;
 }
+
+static bool forward_exe_cmd_request(unsigned long long job_id, char *cmd_name, uint16_t num_args, uint32_t pl_len, char *pl)
+{
+	struct command **iter;
+	iter = tfind(cmd_name, &clid_inst.cmd_tree, compare_cmdname_in_cmd_tree);
+	if(iter == NULL)
+	{
+		TPT_TRACE(TRACE_ABN, "This cmdName %s not found in command tree, something abnormal!", cmd_name);
+		return true;
+	}
+
+	union itc_msg* fwd = itc_alloc(offsetof(struct CmdIfExeCmdRequestS, payload) +  pl_len, CMDIF_EXE_CMD_REQUEST);
+
+	fwd->cmdIfExeCmdRequest.job_id = job_id;
+	strcpy(fwd->cmdIfExeCmdRequest.cmd_name, cmd_name);
+	fwd->cmdIfExeCmdRequest.num_args = num_args;
+	fwd->cmdIfExeCmdRequest.payloadLen = pl_len;
+	memcpy(fwd->cmdIfExeCmdRequest.payload, pl, pl_len);
+
+	if(!itc_send(&fwd, (*iter)->mbox_id, ITC_MY_MBOX_ID, NULL))
+	{
+		TPT_TRACE(TRACE_ERROR, "Failed to send CMDIF_EXE_CMD_REQUEST for cmdName %s to mbox id 0x%08x", cmd_name, (*iter)->mbox_id);
+		return false;
+	}
+
+	TPT_TRACE(TRACE_INFO, "Forwarded CMDIF_EXE_CMD_REQUEST for cmdName %s to mbox id 0x%08x", cmd_name, (*iter)->mbox_id);
+	return true;
+
+}
+
+static bool handle_receive_exe_cmd_reply(union itc_msg *msg)
+{
+	struct shell_client **iter;
+	iter = tfind(&(msg->cmdIfExeCmdReply.job_id), &clid_inst.client_tree, compare_jobid_in_client_tree);
+	if(iter == NULL)
+	{
+		// There are some potential situation:
+		// 1. Job timer was already expired
+		// 2. Shell client pressed Ctrl-C to cancel the previous job execution
+		// 3. Shell client was disconnected
+		// -> Suggest to check log's flow to see what is the reason
+
+		TPT_TRACE(TRACE_ABN, "Received CMDIF_EXE_CMD_REPLY, job_id = %d, which is not valid anymore, something wrong!", msg->cmdIfExeCmdReply.job_id);
+		return true;
+	}
+
+	if(!send_exe_cmd_reply((*iter)->fd, msg->cmdIfExeCmdReply.result, msg->cmdIfExeCmdReply.output))
+	{
+		return false;
+	}
+
+	// Done this job execution, stop the respective job timer and unset current_job_id.
+	if(!set_time_job_timer((*iter)->job_timer_fd, 0))
+	{
+		TPT_TRACE(TRACE_ERROR, "Could not stop job timer fd = %d!", (*iter)->job_timer_fd);
+		return false;
+	}
+
+	(*iter)->current_job_id = 0;
+
+	return true;
+}
+
+static bool handle_job_timer_expired(int timerfd)
+{
+	struct shell_client **iter;
+	iter = tfind(&timerfd, &clid_inst.client_tree, compare_timerfd_in_client_tree);
+	if(iter == NULL)
+	{
+		TPT_TRACE(TRACE_ABN, "Job timer fd = %d not found in client tree, something wrong!", timerfd);
+		return true;
+	}
+
+	(*iter)->current_job_id = 0;
+
+	return true;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

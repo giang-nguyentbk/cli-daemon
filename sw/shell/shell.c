@@ -1406,17 +1406,19 @@ static bool handle_receive_exe_cmd_reply(int sockfd, struct ethtcp_header *heade
 
 	rep = (struct clid_exe_cmd_reply *)rxbuff;
 	rep->errorcode 			= ntohl(rep->errorcode);
+	rep->result			= ntohl(rep->result);
 	rep->payload_length		= ntohl(rep->payload_length);
 
 	printf("Receiving %d bytes from fd %d\n", size, sockfd);
 	printf("Re-interpret TCP packet: errorcode: %u\n", rep->errorcode);
+	printf("Re-interpret TCP packet: result: %u\n", rep->result);
 	printf("Re-interpret TCP packet: payload_length: %u\n", rep->payload_length);
 
-	char buff[512];
-	memcpy(buff, rep->payload, rep->payload_length);
-	buff[rep->payload_length] = '\0';
+	char output[512];
+	memcpy(output, rep->payload, rep->payload_length);
+	output[rep->payload_length] = '\0';
 	
-	printf("Re-interpret TCP packet: cmd_output: %s\n", buff);
+	printf("Re-interpret TCP packet: cmd_output:\n%s\n", output);
 	printf("\n");
 
 	return true;

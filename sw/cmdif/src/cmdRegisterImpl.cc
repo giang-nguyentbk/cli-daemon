@@ -56,7 +56,6 @@ CmdRegisterIf::ReturnCode CmdRegisterImpl::registerCmdHandler(const std::string&
 		lock.unlock();
 
 		union itc_msg* req = itc_alloc(offsetof(struct CmdIfRegCmdRequestS, cmd_desc) + cmdDesc.length() + 1, CMDIF_REG_CMD_REQUEST);
-		req->cmdIfRegCmdRequest.mailbox_id = itc_current_mbox();
 
 		if(cmdName.length() < MAX_CMD_NAME_LENGTH)
 		{
@@ -156,7 +155,7 @@ void CmdRegisterImpl::invokeCmd(const std::shared_ptr<CmdIf::V1::CmdJobIf>& job,
 
 void CmdRegisterImpl::handleExeCmdRequest(const std::shared_ptr<union itc_msg>& msg)
 {
-
+	
 }
 
 } // V1

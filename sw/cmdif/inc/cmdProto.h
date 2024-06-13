@@ -28,7 +28,6 @@
 struct CmdIfRegCmdRequestS
 {
 	uint32_t msgno;
-	itc_mbox_id_t mailbox_id;
 	char cmd_name[MAX_CMD_NAME_LENGTH];
 	char cmd_desc[1];
 };
@@ -36,24 +35,43 @@ struct CmdIfRegCmdRequestS
 struct CmdIfDeregCmdRequestS
 {
 	uint32_t msgno;
-	uint8_t cmd_name[1];
+	char cmd_name[1];
 };
 
 struct CmdIfExeCmdRequestS
 {
 	uint32_t msgno;
+	unsigned long long job_id;
+	char cmd_name[MAX_CMD_NAME_LENGTH];
+	uint32_t num_args;
 	uint32_t payloadLen;
-	uint8_t payload[1];
+	char payload[1];
+
+	/*
+	Payload format:
+		+ num_args: two bytes (uint16_t): number of arguments
+
+		+ arg_len1: two bytes (uint16_t): number of bytes that the 1st argument has
+		+ arg1: "arg_len1" bytes in form of string (not include '\0')
+
+		+ arg_len2: two bytes (uint16_t): number of bytes that the 2nd argument has
+		+ arg2: "arg_len2" bytes in form of string (not include '\0')
+
+		...
+		...
+
+		+ arg_lenn: two bytes (uint16_t): number of bytes that the n-th argument has
+		+ argn: "arg_lenn" bytes in form of string (not include '\0')
+	*/
 
 };
 
 struct CmdIfExeCmdReplyS
 {
 	uint32_t msgno;
+	unsigned long long job_id;
 	uint32_t result;
-	uint32_t payloadLen;
-	uint8_t payload[1];
-
+	char output[1];
 };
 
 

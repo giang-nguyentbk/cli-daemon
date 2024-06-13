@@ -51,6 +51,7 @@ public:
 	CmdJobImpl& operator=(CmdJobImpl&&) 		= delete;
 
 private:
+	unsigned long long m_jobId;
 	std::string m_cmdName;
 	std::vector<std::string> m_args;
 	std::string m_output;

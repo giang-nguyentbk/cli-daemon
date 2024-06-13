@@ -90,6 +90,7 @@ struct clid_exe_cmd_request {
 struct clid_exe_cmd_reply {
 	// uint32_t	payload_startpoint;
 	uint32_t	errorcode;
+	uint32_t	result;
 	uint32_t	payload_length;
 	char		payload[1]; // String that shell client will print out for the user about results of the requested command
 };
