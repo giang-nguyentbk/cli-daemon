@@ -1227,7 +1227,7 @@ static bool handle_receive_get_list_cmd_reply(int sockfd, struct ethtcp_header *
 	unsigned long offset = 2;
 	uint16_t cmd_len = 0;
 	char cmd_buff[MAX_ARG_LENGTH];
-	uint16_t num_cmds = *((uint16_t *)(&rep->payload));
+	uint16_t num_cmds = *((uint16_t *)(rep->payload));
 	printf("Re-interpret TCP packet: num_cmds: %hu\n", num_cmds);
 	for(int i = 0; i < num_cmds; i++)
 	{
@@ -1237,9 +1237,9 @@ static bool handle_receive_get_list_cmd_reply(int sockfd, struct ethtcp_header *
 			if(m_remote_cmds[j].cmd[0] == '\0')
 			{
 				/* This is command name */
-				cmd_len = *((uint16_t *)(&rep->payload + offset));
+				cmd_len = *((uint16_t *)(rep->payload + offset));
 				offset += 2;
-				memcpy(cmd_buff, (&rep->payload + offset), cmd_len);
+				memcpy(cmd_buff, (rep->payload + offset), cmd_len);
 				cmd_buff[cmd_len] = '\0';
 				offset += cmd_len;
 				printf("Re-interpret TCP packet: cmd_len %d: %hu\n", i, cmd_len);
@@ -1247,9 +1247,9 @@ static bool handle_receive_get_list_cmd_reply(int sockfd, struct ethtcp_header *
 				strcpy(m_remote_cmds[j].cmd, cmd_buff);
 
 				/* This is command description */
-				cmd_len = *((uint16_t *)(&rep->payload + offset));
+				cmd_len = *((uint16_t *)(rep->payload + offset));
 				offset += 2;
-				memcpy(cmd_buff, (&rep->payload + offset), cmd_len);
+				memcpy(cmd_buff, (rep->payload + offset), cmd_len);
 				cmd_buff[cmd_len] = '\0';
 				offset += cmd_len;
 				printf("Re-interpret TCP packet: cmd_desc_len %d: %hu\n", i, cmd_len);
@@ -1288,25 +1288,25 @@ static void do_nothing(void *tree_node_data)
 static bool send_exe_cmd_request(int sockfd)
 {
 	uint32_t total_len = 0;
-	uint16_t cmd_len = 0;
-	char cmds_buff[2 + strlen(m_args[0]) + 2 + m_nr_args*(2 + MAX_ARG_LENGTH)];
+	uint16_t len = 0;
+	char cmds_buff[(strlen(m_args[0]) + 1) + 2 + m_nr_args*(MAX_ARG_LENGTH)]; // cmdName + num_args + series_of_args_in_string_format
 
-	cmd_len = strlen(m_args[0]);
-	*((uint16_t *)(&cmds_buff[total_len])) = cmd_len;
-	total_len += 2;
+	len = strlen(m_args[0]) + 1; // Include '\0'
+	// *((uint16_t *)(&cmds_buff[total_len])) = len;
+	// total_len += 2;
 	strcpy(&cmds_buff[total_len], m_args[0]);
-	total_len += cmd_len;
+	total_len += len;
 
 	*((uint16_t *)(&cmds_buff[total_len])) = m_nr_args;
 	total_len += 2;
 
 	for(int i = 0; i < m_nr_args; i++)
 	{
-		cmd_len = strlen(m_args[i]);
-		*((uint16_t *)(&cmds_buff[total_len])) = cmd_len;
-		total_len += 2;
+		len = strlen(m_args[i]) + 1; // Include '\0'
+		// *((uint16_t *)(&cmds_buff[total_len])) = len;
+		// total_len += 2;
 		strcpy(&cmds_buff[total_len], m_args[i]);
-		total_len += cmd_len;
+		total_len += len;
 	}
 
 	size_t msg_len = offsetof(struct ethtcp_msg, payload) + offsetof(struct clid_exe_cmd_request, payload) + total_len;

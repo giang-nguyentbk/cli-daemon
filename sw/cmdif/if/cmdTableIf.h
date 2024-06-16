@@ -36,9 +36,9 @@ public:
 		std::string m_desc;
 	};
 
-	virtual void registerCmdTable(const std::string& cmdName, const std::vector<CmdFunction>& cmdDefinitions) = 0;
+	virtual void registerCmdTable(const std::string& cmdName, const std::vector<CmdDefinition>& cmdDefinitions) = 0;
 	virtual CmdIf::V1::CmdTypesIf::CmdResultCode executeCmd(const std::vector<std::string>& args, std::string& output) = 0;
-	virtual bool printCmdHelp(const std::vector<std::string>& args, std::string& output, const std::vector<CmdDefinition>& cmdDefinitions) = 0;
+	virtual void printCmdHelp(const std::vector<CmdTableIf::CmdDefinition>& cmdDefinitions, std::string& output) = 0;
 
 	// Avoid copy/move constructors, assigments
 	CmdTableIf(const CmdTableIf&) 			= delete;

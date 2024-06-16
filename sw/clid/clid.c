@@ -731,31 +731,36 @@ static bool handle_receive_exe_cmd_request(int sockfd, struct ethtcp_header *hea
 	uint16_t cmd_name_len = 0;
 	char cmd_name[MAX_CMD_NAME_LENGTH];
 
-	cmd_name_len = *((uint16_t *)(&req->payload + offset));
-	offset += 2;
+	cmd_name_len = *((uint16_t *)(req->payload + offset));
+	// offset += 2;
 	TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: cmd_name_len: %hu", cmd_name_len);
-	memcpy(cmd_name, (&req->payload + offset), cmd_name_len);
-	cmd_name[cmd_name_len] = '\0';
+	strcpy(cmd_name, (req->payload + offset));
+	// memcpy(cmd_name, (req->payload + offset), cmd_name_len);
+	// cmd_name[cmd_name_len] = '\0';
 	offset += cmd_name_len;
 	TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: cmd_name: %s", cmd_name);
 
-	uint16_t num_args = *((uint16_t *)(&req->payload + offset));
+	uint16_t num_args = *((uint16_t *)(req->payload + offset));
 	offset += 2;
 	TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: num_args: %hu", num_args);
 
+	char *payload = (req->payload + offset);
+	uint32_t payload_len = req->payload_length - offset;
+
 	/* DEBUG PURPOSE ONLY */
 	uint16_t arg_len = 0;
-	char arg[MAX_CMD_NAME_LENGTH];
+	char args[MAX_CMD_NAME_LENGTH];
 	for(int i = 0; i < num_args; i++)
 	{
 		/* This is arguments */
-		arg_len = *((uint16_t *)(&req->payload + offset));
-		offset += 2;
-		memcpy(arg, (&req->payload + offset), arg_len);
-		arg[arg_len] = '\0';
+		arg_len = *((uint16_t *)(req->payload + offset));
+		// offset += 2;
+		strcpy(args, (req->payload + offset));
+		// memcpy(args, (req->payload + offset), arg_len);
+		// args[arg_len] = '\0';
 		offset += arg_len;
 		TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: arg_len %d: %hu", i, arg_len);
-		TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: arg %d: %s", i, arg);
+		TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: args %d: %s", i, args);
 	}
 
 	// Prepare a new job_id assigned to this execution
@@ -776,8 +781,7 @@ static bool handle_receive_exe_cmd_request(int sockfd, struct ethtcp_header *hea
 		return false;
 	}
 
-	// TODO: forward to respective mailbox who registered cmds
-	if(!forward_exe_cmd_request(new_job_id, cmd_name, num_args, req->payload_length, req->payload))
+	if(!forward_exe_cmd_request(new_job_id, cmd_name, num_args, payload_len, payload))
 	{
 		return false;
 	}

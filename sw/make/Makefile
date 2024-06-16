@@ -8,6 +8,7 @@ include Makefile.config
 # --------------------------------------------------
 include $(SW_DIR)/shell/Makefile
 include $(SW_DIR)/clid/Makefile
+include $(SW_DIR)/cmdif/Makefile
 
 
 

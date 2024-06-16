@@ -49,8 +49,6 @@ struct CmdIfExeCmdRequestS
 
 	/*
 	Payload format:
-		+ num_args: two bytes (uint16_t): number of arguments
-
 		+ arg_len1: two bytes (uint16_t): number of bytes that the 1st argument has
 		+ arg1: "arg_len1" bytes in form of string (not include '\0')
 

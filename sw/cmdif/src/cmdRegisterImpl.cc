@@ -10,10 +10,18 @@
 #include <traceIf.h>
 
 #include "cmdRegisterImpl.h"
-#include "cmdJobIf.h"
+#include "cmdJobImpl.h"
 #include "cmdTypesIf.h"
 #include "cmdProto.h"
 
+namespace // anonymous namespace
+{
+
+using namespace CmdIf::V1;
+
+
+
+} // anonymous namespace
 
 namespace CmdIf
 {
@@ -44,7 +52,7 @@ void CmdRegisterImpl::reset()
 	m_registeredInvokers.clear();
 }
 
-CmdRegisterIf::ReturnCode CmdRegisterImpl::registerCmdHandler(const std::string& cmdName, const std::string& cmdDesc, const CmdHandler& cmdHandler)
+CmdRegisterIf::ReturnCode CmdRegisterImpl::registerCmdHandler(const std::string& cmdName, const std::string& cmdDesc, const CmdCallback& cmdHandler)
 {
 	CmdRegisterIf::ReturnCode rc = CmdRegisterIf::ReturnCode::ALREADY_EXISTS;
 	std::unique_lock<std::mutex> lock(m_mutex);
@@ -52,7 +60,7 @@ CmdRegisterIf::ReturnCode CmdRegisterImpl::registerCmdHandler(const std::string&
 	auto iter = m_registeredInvokers.find(cmdName);
 	if(iter == m_registeredInvokers.end())
 	{
-		m_registeredInvokers.emplace(cmdName, std::bind(&invokeCmd, std::placeholders::_1, cmdHandler));
+		m_registeredInvokers.emplace(cmdName, std::bind(&CmdRegisterImpl::invokeCmd, this, std::placeholders::_1, cmdHandler));
 		lock.unlock();
 
 		union itc_msg* req = itc_alloc(offsetof(struct CmdIfRegCmdRequestS, cmd_desc) + cmdDesc.length() + 1, CMDIF_REG_CMD_REQUEST);
@@ -77,7 +85,8 @@ CmdRegisterIf::ReturnCode CmdRegisterImpl::registerCmdHandler(const std::string&
 		if(!itc_send(&req, m_clidMboxId, ITC_MY_MBOX_ID, NULL))
 		{
 			TPT_TRACE(TRACE_ERROR, "Failed to send CMDIF_REG_CMD_REQUEST to clid for cmdName = %s!", cmdName);
-			return;
+			rc = CmdRegisterIf::ReturnCode::INTERNAL_ERROR;
+			return rc;
 		}
 
 		TPT_TRACE(TRACE_INFO, "Send CMDIF_REG_CMD_REQUEST to clid successfully!");
@@ -120,7 +129,8 @@ CmdRegisterIf::ReturnCode CmdRegisterImpl::deregisterCmdHandler(const std::strin
 		if(!itc_send(&req, m_clidMboxId, ITC_MY_MBOX_ID, NULL))
 		{
 			TPT_TRACE(TRACE_ERROR, "Failed to send CMDIF_DEREG_CMD_REQUEST to clid for cmdName = %s!", cmdName);
-			return;
+			rc = CmdRegisterIf::ReturnCode::INTERNAL_ERROR;
+			return rc;
 		}
 
 		TPT_TRACE(TRACE_INFO, "Send CMDIF_DEREG_CMD_REQUEST to clid successfully!");
@@ -130,6 +140,12 @@ CmdRegisterIf::ReturnCode CmdRegisterImpl::deregisterCmdHandler(const std::strin
 
 	TPT_TRACE(TRACE_ABN, "Command name %s not found!", cmdName);
 	return rc;
+}
+
+void invokeCmd(const std::shared_ptr<CmdIf::V1::CmdJobIf>& job, const CmdRegisterIf::CmdCallback& cmdHandler)
+{
+	TPT_TRACE(TRACE_INFO, "Invoking cmd handler: %s", job->getCmdName());
+	cmdHandler(job);
 }
 
 void CmdRegisterImpl::init()
@@ -144,18 +160,44 @@ void CmdRegisterImpl::init()
 	}
 
 	IItcPubSub& itcPubSub = IItcPubSub::getInstance();
-	itcPubSub.registerMsg(CMDIF_EXE_CMD_REQUEST, std::bind(&handleExeCmdRequest, this, std::placeholders::_1));
-}
-
-void CmdRegisterImpl::invokeCmd(const std::shared_ptr<CmdIf::V1::CmdJobIf>& job, const CmdRegisterIf::CmdHandler& cmdHandler)
-{
-	TPT_TRACE(TRACE_INFO, "Invoking cmd handler: %s", job->getCmdName());
-	cmdHandler(job);
+	itcPubSub.registerMsg(CMDIF_EXE_CMD_REQUEST, std::bind(&CmdRegisterImpl::handleExeCmdRequest, this, std::placeholders::_1));
 }
 
 void CmdRegisterImpl::handleExeCmdRequest(const std::shared_ptr<union itc_msg>& msg)
 {
-	
+	// TODO: Create a Job, save job_id and pass it to the class who registered the cmdHandler.
+	// Reinterpret cmd arguments sent from clid daemon and pass to cmdTableIf for decoding the syntax and executing the actual cmd
+
+	std::string printArgs {"\""};
+	std::vector<std::string> argsList;
+	uint32_t numArgs = msg->cmdIfExeCmdRequest.num_args;
+	char* args = msg->cmdIfExeCmdRequest.payload;
+
+	for(uint32_t i = 0; i < numArgs; i++)
+	{
+		std::string str(args);
+		printArgs += str;
+		printArgs += " ";
+
+		argsList.push_back(str);
+		args += (str.length() + 1);
+		
+	}
+
+	printArgs += "\"";
+	TPT_TRACE(TRACE_INFO, "Received execute command request from clid for cmdName %s, with args %s", msg->cmdIfExeCmdRequest.cmd_name, printArgs.c_str());
+
+	auto job = std::make_shared<CmdIf::V1::CmdJobImpl>(msg->cmdIfExeCmdRequest.cmd_name, msg->cmdIfExeCmdRequest.job_id, argsList, m_clidMboxId);
+
+	auto iter = m_registeredInvokers.find(job->getCmdName());
+	if(iter != m_registeredInvokers.cend())
+	{
+		// Pass the job to registered cmdHandler which previously added by registerCmdHandler()
+		iter->second(job);
+	} else
+	{
+		TPT_TRACE(TRACE_ERROR, "No registered cmdHandler found for cmdName %s", job->getCmdName());
+	}
 }
 
 } // V1

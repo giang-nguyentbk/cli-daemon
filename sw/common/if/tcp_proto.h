@@ -67,22 +67,18 @@ struct clid_exe_cmd_request {
 	/* Format:
 	+ payload_length = number of bytes that payload has
 	+ payload:
-		+ cmd_name_len: first two bytes (uint16_t): cmd_name length
-		+ cmd_name: "cmd_name_len" bytes in form of string (not include '\0')
+		+ cmd_name: "cmd_name_len" bytes in form of string (include '\0')
 
 		+ num_args: two bytes (uint16_t): number of arguments
 
-		+ arg_len1: two bytes (uint16_t): number of bytes that the 1st argument has
-		+ arg1: "arg_len1" bytes in form of string (not include '\0')
+		+ arg1: string of argument 1st (include '\0')
 
-		+ arg_len2: two bytes (uint16_t): number of bytes that the 2nd argument has
-		+ arg2: "arg_len2" bytes in form of string (not include '\0')
+		+ arg2: string of argument 2nd (include '\0')
 
 		...
 		...
 
-		+ arg_lenn: two bytes (uint16_t): number of bytes that the n-th argument has
-		+ argn: "arg_lenn" bytes in form of string (not include '\0')
+		+ argn: string of argument n-th (include '\0')
 	*/
 };
 

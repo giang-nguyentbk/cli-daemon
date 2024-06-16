@@ -1,0 +1,474 @@
+#include <string>
+#include <cstring>
+#include <memory>
+#include <vector>
+#include <map>
+#include <functional>
+
+#include "cmdSyntaxGraph.h"
+
+namespace CmdIf
+{
+
+namespace V1
+{
+
+GraphNode::GraphNode(const std::string& nodeName)
+{
+	m_anyValue = strchr(nodeName.c_str(), '<') && strchr(nodeName.c_str(), '>');
+	m_name = nodeName;
+}
+
+std::shared_ptr<GraphNode> GraphNode::createAndAddNewSubnodeIfNotExist(const std::string& nodeName)
+{
+	/* If subnode already exists, just return the subnode */
+	std::shared_ptr<GraphNode> existingNode = findSubnode(nodeName);
+	if(existingNode)
+	{
+		return existingNode;
+	}
+
+	/* If not, create one and add the created subnode to the current node if not exist */
+	std::shared_ptr<GraphNode> newNode = std::make_shared<GraphNode>(nodeName);
+	return addCreatedSubnodeIfNotExist(newNode);
+}
+
+std::shared_ptr<GraphNode> GraphNode::addCreatedSubnodeIfNotExist(std::shared_ptr<GraphNode>& createdSubnode)
+{
+	if(findSubnode(createdSubnode->m_name))
+	{
+		return createdSubnode;
+	}
+
+	m_subNodeList.push_back(createdSubnode);
+	return createdSubnode;
+}
+
+std::shared_ptr<GraphNode> GraphNode::findSubnode(const std::string& nodeName)
+{
+	for(const auto& node : m_subNodeList)
+	{
+		if(node->m_name == nodeName)
+		{
+			return node;
+		}
+	}
+
+	return nullptr;
+}
+
+GraphNodeList GraphNode::getMatchingSubnodes(const std::string& nodeName)
+{
+	/* Prefer seeking for exactly matching node name */
+	for(const auto& node : m_subNodeList)
+	{
+		if(!node->m_anyValue && node->m_name == nodeName)
+		{
+			return { node };
+		}
+	}
+
+	/* If not, return all any_value nodes */
+	GraphNodeList matchingSubnodeList;
+	for(const auto& node : m_subNodeList)
+	{
+		if(node->m_anyValue)
+		{
+			matchingSubnodeList.push_back(node);
+		}
+	}
+
+	return matchingSubnodeList;
+}
+
+bool CmdSyntaxGraph::getNextToken(const char*& syntax, std::string& token)
+{
+	/* arg1 arg2 	arg3 arg4 ... 
+	            ^
+                    |
+		    *syntax pointer is pointing to here
+
+		    Skip white spaces and tabs to come to the next argument, for example, the start of arg3 as above.
+	*/
+	while(*syntax && strchr(" \t", *syntax))
+	{
+		syntax++;
+	}
+
+	/* arg1 { arg2 | [ arg3 ] } arg4 ... 
+		^      ^ ^
+                |      | |
+		*syntax pointer is either pointing to these places
+
+		Capture special characters.
+	*/
+	if(*syntax && strchr("{[|]}", *syntax))
+	{
+		token = *syntax++;
+		return true;
+	}
+
+	/* Or token is an actual argument */
+	token.clear(); // Clear the previous token
+	int angleBracketFlag = 0; // To see if this actual argument is an any value which is inside < >
+	while(*syntax && (angleBracketFlag > 0 || !strchr(" \t{[|]}", *syntax)))
+	{
+		// Note that: Node name of nodes where m_anyValue is set will be in form of "<abc>" for example,
+		// so when constructor of GraphNode call, m_anyValue should be set since '<' and '>' found in node name
+		angleBracketFlag += (*syntax == '<') ? 1 : (*syntax == '>' ? -1 : 0);
+		token += *syntax++;
+	}
+
+	return (token.length() > 0);
+}
+
+char CmdSyntaxGraph::splitOutSyntax(const char*& syntax, GraphNodeList& lastNodes)
+{
+	std::string token;
+
+	/* The final aim is to split out all arguments in a syntax for example like this:
+	>> abc { def ghi | jkl [ mno | pqr ] } stu 123
+	*/
+	while(getNextToken(syntax, token))
+	{
+		char c = token[0];
+
+		/* Start a collection of some new nodes which is inside { ... | ... } or [ ... | ... ] */
+		if(c == '{' || c == '[')
+		{
+			GraphNodeList newLastNodes; // All nodes in this collection will be the new last nodes
+
+			/* If it's [ ] instead of { }, nodes inside [ ] will be considered as optional, so included in the current last node list */
+			if(c == '[')
+			{
+				newLastNodes = lastNodes;
+			}
+
+			do
+			{
+				// Make a copy of the current lastNodes to provide into a recursive call of splitOutSyntax()
+				// to process nodes inside { } or [ ]
+				GraphNodeList copiedLastNodes = lastNodes;
+
+				// Process nodes inside { } or [ ] one by one which are separated out by '|'
+				/* For example: abc { def ghi | jkl [ mno ] }
+						    ^
+						    |
+						    *syntax is pointing to here
+
+					After the splitOutSyntax() call below, we will have copiedLastNodes with nodes "def" and "ghi",
+					then new while() loop for the next alternative arguments which are in between of special characters '|'
+				*/
+				c = splitOutSyntax(syntax, copiedLastNodes);
+				for(const auto& node : copiedLastNodes)
+				{
+					/* After done push all nodes inside { } or [ ] to our newLastNodes in the current context */
+					newLastNodes.push_back(node);
+				}
+			} while(c == '|'); // Continue for all child collections inside { } or [ ] until reaching out '}' or ']'
+
+			lastNodes = newLastNodes; // Assign back new last nodes to "lastNodes" to update the "lastNodes" of current context
+		}
+		else if(c == '|' || c == '}' || c == ']')
+		{
+			return c;
+		}
+		else
+		{
+			if(lastNodes.size() == 1 && lastNodes[0]->m_name == token)
+			{
+				// No need to add a node that has a same name with cmdName, and also is the first argument which should have been created by addSyntax()
+				// Or by some weird situation, two consecutive arguments have a same name, ignore the latter
+				// INFO TRACE: is needed here to print out lastNodes[0]->m_name and token
+				continue;
+			}
+			else
+			{
+				// A single successive node which should be linked to all current last nodes
+				appendNewNodeToLastNodes(token, lastNodes);
+			}
+		}
+	}
+
+	return '\0'; // Indicate that we have done spliting out a syntax
+}
+
+void CmdSyntaxGraph::appendNewNodeToLastNodes(const std::string& nodeName, GraphNodeList& lastNodes)
+{
+	std::shared_ptr<GraphNode> newNode;
+
+	for(const auto& node : lastNodes)
+	{
+		/* */
+		if(!newNode || newNode == node)
+		{
+			newNode = node->createAndAddNewSubnodeIfNotExist(nodeName);
+		}
+		else
+		{
+			node->addCreatedSubnodeIfNotExist(newNode);
+		}
+	}
+
+	// After append newNode to all last nodes in the lastNodes list, set lastNodes to the just-appended one
+	lastNodes.clear();
+	lastNodes.push_back(newNode);
+}
+
+bool CmdSyntaxGraph::validateBrackets(const std::string& syntax, char openBracket, char closeBracket)
+{
+	int checkBrackets = 0;
+	
+	for(const auto& c : syntax)
+	{
+		checkBrackets += (c == openBracket) ? +1 : (c == closeBracket) ? -1 : 0;
+	}
+
+	if(checkBrackets)
+	{
+		// ERROR trace: unbalanced brackets
+		return false;
+	}
+
+	return true;
+}
+
+void CmdSyntaxGraph::addSyntax(std::shared_ptr<GraphNode>& firstNode, const std::string& syntax, const CmdTableIf::CmdFunction& cmdHandler)
+{
+	if(!validateBrackets(syntax, '{', '}') || !validateBrackets(syntax, '[', ']') || !validateBrackets(syntax, '<', '>'))
+	{
+		return;
+	}
+
+	GraphNodeList lastNodes { firstNode };
+	const char* s = syntax.c_str();
+	if(splitOutSyntax(s, lastNodes) != '\0')
+	{
+		// ERROR TRACE: Incomplete syntax
+		return;
+	}
+
+	// Assign cmdHandler to the last nodes
+	for(auto& node : lastNodes)
+	{
+		node->m_handler = cmdHandler;
+	}
+
+}
+
+void CmdSyntaxGraph::addCommand(const std::string& cmdName, const std::vector<std::pair<std::string, CmdTableIf::CmdFunction>>& syntaxHandler)
+{
+	std::scoped_lock<std::mutex> lock(m_mutex);
+
+	const auto& cmd = m_cmdMap.find(cmdName);
+	if(cmd != m_cmdMap.cend())
+	{
+		// ABN TRACE: cmdName already added in the CmdTableIf
+		return;
+	}
+
+	std::shared_ptr<GraphNode> firstNode = std::make_shared<GraphNode>(cmdName);
+
+	for(const auto& sh : syntaxHandler)
+	{
+		addSyntax(firstNode, sh.first, sh.second);
+	}
+
+	m_cmdMap.emplace(std::make_pair(cmdName, firstNode));
+	
+}
+
+std::shared_ptr<GraphNode> CmdSyntaxGraph::evaluateCommandArguments(std::shared_ptr<GraphNode> currentNode, std::shared_ptr<std::string> validArgs, size_t numArgs, std::vector<std::string>::const_iterator args) const
+{
+	// Go through all actual arguments (excluded the first argument which is the cmdName as well)
+	// The first argument should be already checked by executeCmdHandler()
+	for(size_t i = 0; i < numArgs; ++i)
+	{
+		GraphNodeList subnodes = currentNode->getMatchingSubnodes(args[i]);
+
+		size_t numSubnodes = subnodes.size();
+		if(numSubnodes == 0)
+		{
+			// No matching subnodes found in this potential path: skip all remaining arguments
+			return currentNode;
+		}
+		else if(numSubnodes == 1)
+		{
+			// Only one matching subnode: this is a string literal argument or this is a anyValue argument
+			if(subnodes[0]->m_handler && numArgs == i + 1)
+			{
+				// check if it's the last one in the path which should have the cmdHandler
+				return subnodes[0]; // cmdHandler found, finish!
+			}
+
+			// If not, continue to the next argument
+			currentNode = subnodes[0];
+			if(validArgs)
+			{
+				*validArgs += currentNode->m_name;
+				*validArgs += " ";
+			}
+		}
+		else
+		{
+			// Multiple matching subnodes (these are anyValue nodes)
+			for(const auto& subnode : subnodes)
+			{
+				// If subnode has no any subnodes, return itself (see the first "if" case), then we can check if cmdHander is hold by it below
+				// std::shared_ptr<GraphNode> sn = evaluateCommandArguments(subnode, validArgs, numArgs - (i + 1), args + (i + 1));
+				std::shared_ptr<GraphNode> sn = evaluateCommandArguments(subnode, nullptr, numArgs - (i + 1), args + (i + 1)); // First version
+				if(sn && sn->m_handler)
+				{
+					return sn; // cmdHandler found, finish!
+				}
+			}
+
+			// Even if after digging deeper into all above subnodes's path we cannot find the last node that contains cmdHandler, we must give up here!
+			if(validArgs)
+			{
+				*validArgs += args[i];
+				*validArgs += " ";
+			}
+
+			return subnodes[0]; // If failed, by default choose the first subnode of subnodes to start printing a correct syntax
+		}
+	}
+
+	// All actual arguments have been checked and just found one path that match those arguments
+	return currentNode;
+}
+
+const std::shared_ptr<CmdTableIf::CmdFunction> CmdSyntaxGraph::executeCmdHandler(size_t numArgs, std::vector<std::string>::const_iterator args, std::string& output) const
+{
+	std::scoped_lock<std::mutex> lock(m_mutex);
+	
+	const auto& firstNodeIter = m_cmdMap.find(args[0]);
+	if(firstNodeIter == m_cmdMap.cend())
+	{
+		// ABN TRACE: cmdName not found in CmdTableIf
+		return nullptr;
+	}
+	
+	std::shared_ptr<std::string> validArgs = std::make_shared<std::string>(firstNodeIter->first);
+	*validArgs += " ";
+
+	std::shared_ptr<GraphNode> node = evaluateCommandArguments(firstNodeIter->second, validArgs, numArgs - 1, args + 1);
+
+	if(node && node->m_handler)
+	{
+		return std::make_shared<CmdTableIf::CmdFunction>(node->m_handler);
+	}
+	else
+	{
+		output += "Usage: ";
+		output += *validArgs;
+		// Continuously add the correct syntax after validArgs to the output
+		printfCorrectSyntax(node, output);
+		output += "\n\n";
+
+		return nullptr;
+	}
+
+}
+
+void CmdSyntaxGraph::printfCorrectSyntax(std::shared_ptr<GraphNode> currentNode, std::string& output)
+{
+	while(currentNode)
+	{
+		size_t numSubnodes = currentNode->m_subNodeList.size();
+
+		if(numSubnodes == 0)
+		{
+			break;
+		}
+		else if(numSubnodes == 1)
+		{
+			CmdTableIf::CmdFunction prevHandler = currentNode->m_handler;
+			currentNode = currentNode->m_subNodeList[0];
+
+			if(prevHandler && currentNode->m_handler && currentNode->m_subNodeList.size() == 0)
+			{
+				/* Single optional argument 
+				... 	A	->	B	->	C 
+							^		^
+							|		|
+							cmdHandler	cmdHandler
+
+				=> Possible commands:
+					1. ... A B
+					2. ... A B C
+
+				=> Syntax: ... A B [C]
+				*/
+				output += "[ ";
+				output += currentNode->m_name; // this is node "C" in above example
+				output += " ] ";
+			}
+			else
+			{
+				/*
+				... 	A	->	B	->	C	->	D	->	...
+					^				^		^
+					|				|		|
+					cmdHandler			cmdHandler	cmdHandler
+
+				=> Example situation:
+					1. A B 		: currentNode is A -> Add "B" into the output
+					2. B C 		: currentNode is B -> Add "C" into the output
+					2. C D ... 	: currentNode is C -> Add "D" into the output
+					2. B C 		: currentNode is B -> Add "C" into the output
+
+				*/
+
+				output += currentNode->m_name;
+				output += " ";
+			}
+		}
+		else if(numSubnodes == 2 &&
+			currentNode->m_subNodeList[0]->m_subNodeList.size() &&
+			currentNode->m_subNodeList[0]->findSubnode(currentNode->m_subNodeList[1]->m_name))
+			// currentNode->m_subNodeList[0]->m_subNodeList[0] == currentNode->m_subNodeList[1]) // First version
+		{
+			/*
+					---------------------------------
+					|				|
+					|				v
+				... 	A	->	B	->	C	->	...
+
+				=> Possible situation:
+					1. A B C
+					2. A C
+
+				=> Syntax: ... A [ B ] C
+				*/
+
+			const std::string& optKey = currentNode->m_subNodeList[0]->m_name;
+			currentNode = currentNode->m_subNodeList[1];
+			output += "[ ";
+			output += optKey;
+			output += " ] ";
+			output += currentNode->m_name;
+			output += " ";
+		}
+		else
+		{
+			const char* altKey { "" };
+			output += "{ ";
+
+			for(const auto& node : currentNode->m_subNodeList)
+			{
+				output += altKey;
+				output += node->m_name;
+				output += " ";
+				altKey = "| ";
+			}
+
+			output += " }";
+			break;
+		}
+	}
+}
+
+} // namespace V1
+
+} // namespace CmdIf

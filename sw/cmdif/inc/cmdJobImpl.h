@@ -24,7 +24,7 @@ namespace V1
 class CmdJobImpl : public CmdJobIf
 {
 public:
-	CmdJobImpl(const std::string& cmdName, const std::vector<std::string>& args, std::string& output, itc_mbox_id_t clidMboxId);
+	CmdJobImpl(const std::string& cmdName, const unsigned long long jobId, const std::vector<std::string>& args, itc_mbox_id_t clidMboxId);
 	virtual ~CmdJobImpl();
 
 	const std::string& getCmdName() const override
@@ -51,11 +51,11 @@ public:
 	CmdJobImpl& operator=(CmdJobImpl&&) 		= delete;
 
 private:
-	unsigned long long m_jobId;
 	std::string m_cmdName;
+	unsigned long long m_jobId;
 	std::vector<std::string> m_args;
-	std::string m_output;
 	itc_mbox_id_t m_clidMboxId;
+	std::string m_output;
 
 }; // class CmdJobImpl
 

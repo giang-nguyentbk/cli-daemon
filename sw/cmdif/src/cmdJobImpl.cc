@@ -16,10 +16,10 @@ namespace CmdIf
 namespace V1
 {
 
-CmdJobImpl::CmdJobImpl(const std::string& cmdName, const std::vector<std::string>& args, std::string& output, itc_mbox_id_t clidMboxId)
+CmdJobImpl::CmdJobImpl(const std::string& cmdName, const unsigned long long jobId, const std::vector<std::string>& args, itc_mbox_id_t clidMboxId)
 	: m_cmdName(cmdName),
+	  m_jobId(jobId),
 	  m_args(args),
-	  m_output(output),
 	  m_clidMboxId(clidMboxId)
 {
 }
