@@ -9,36 +9,29 @@
 
 #pragma once
 
-#include <string>
-#include <vector>
-#include <functional>
+#include "cmdSyntaxGraph.h"
+
 
 namespace CmdIf
 {
 
 namespace V1
 {
-class CmdTypesIf
+
+class CmdSyntaxGraphTest
 {
 public:
-	enum class CmdResultCode
-	{
-		CMD_RET_SUCCESS,
-		CMD_RET_INVALID_ARGS,
-		CMD_RET_FAIL
-	};
+	CmdSyntaxGraphTest() = default;
+	virtual ~CmdSyntaxGraphTest() = default;
 
-	using CmdFunction = std::function<CmdResultCode(const std::vector<std::string>& arguments, std::string& outputStream)>;
+	bool getNextTokenTest(const char*& syntax, std::string& token);
 
-	struct CmdDefinition
-	{
-		std::string m_syntax;
-		CmdTypesIf::CmdFunction m_handler;
-		std::string m_desc;
-	};
+private:
+	CmdSyntaxGraph m_syntaxGraph;
 
-}; // class CmdTypesIf
+}; // class CmdSyntaxGraphTest
 
-} // V1
+	
+} // namespace V1
 
 } // namespace CmdIf

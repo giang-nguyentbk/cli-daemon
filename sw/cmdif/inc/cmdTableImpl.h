@@ -23,9 +23,9 @@ class CmdTableImpl : public CmdTableIf
 public:
 	static CmdTableImpl& getInstance();
 
-	void registerCmdTable(const std::string& cmdName, const std::vector<CmdTableIf::CmdDefinition>& cmdDefinitions) override;
+	void registerCmdTable(const std::string& cmdName, const std::vector<CmdTypesIf::CmdDefinition>& cmdDefinitions) override;
 	CmdIf::V1::CmdTypesIf::CmdResultCode executeCmd(const std::vector<std::string>& args, std::string& output) override;
-	void printCmdHelp(const std::vector<CmdTableIf::CmdDefinition>& cmdDefinitions, std::string& output) override;
+	void printCmdHelp(const std::vector<CmdTypesIf::CmdDefinition>& cmdDefinitions, std::string& output) override;
 
 	CmdTableImpl() = default;
 	virtual ~CmdTableImpl() = default;

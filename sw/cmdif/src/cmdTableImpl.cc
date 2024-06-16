@@ -7,9 +7,9 @@ namespace CmdIf
 namespace V1
 {
 
-void CmdTableImpl::registerCmdTable(const std::string& cmdName, const std::vector<CmdTableIf::CmdDefinition>& cmdDefinitions)
+void CmdTableImpl::registerCmdTable(const std::string& cmdName, const std::vector<CmdTypesIf::CmdDefinition>& cmdDefinitions)
 {
-	std::vector<std::pair<std::string, CmdTableIf::CmdFunction>> syntaxes;
+	std::vector<std::pair<std::string, CmdTypesIf::CmdFunction>> syntaxes;
 	syntaxes.reserve(cmdDefinitions.size());
 	for(auto& cmdDef : cmdDefinitions)
 	{
@@ -23,7 +23,7 @@ CmdIf::V1::CmdTypesIf::CmdResultCode CmdTableImpl::executeCmd(const std::vector<
 {
 	auto res = CmdTypesIf::CmdResultCode::CMD_RET_FAIL;
 
-	const std::shared_ptr<CmdTableIf::CmdFunction> handler = m_syntaxGraph.executeCmdHandler(args.size(), args.cbegin(), output);
+	const std::shared_ptr<CmdTypesIf::CmdFunction> handler = m_syntaxGraph.findCmdHandler(args.size(), args.cbegin(), output);
 	if(handler)
 	{
 		// INFO TRACE: Executing command: 
@@ -33,7 +33,7 @@ CmdIf::V1::CmdTypesIf::CmdResultCode CmdTableImpl::executeCmd(const std::vector<
 	return res;
 }
 
-void CmdTableImpl::printCmdHelp(const std::vector<CmdTableIf::CmdDefinition>& cmdDefinitions, std::string& output)
+void CmdTableImpl::printCmdHelp(const std::vector<CmdTypesIf::CmdDefinition>& cmdDefinitions, std::string& output)
 {
 	static const std::string INDENT { "\n     " };
 

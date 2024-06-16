@@ -27,18 +27,13 @@ class CmdTableIf
 public:
 	static CmdTableIf& getInstance();
 
-	using CmdFunction = std::function<CmdIf::V1::CmdTypesIf::CmdResultCode(const std::vector<std::string>& arguments, std::string& outputStream)>;
+	
 
-	struct CmdDefinition
-	{
-		std::string m_syntax;
-		CmdFunction m_handler;
-		std::string m_desc;
-	};
+	
 
-	virtual void registerCmdTable(const std::string& cmdName, const std::vector<CmdDefinition>& cmdDefinitions) = 0;
+	virtual void registerCmdTable(const std::string& cmdName, const std::vector<CmdTypesIf::CmdDefinition>& cmdDefinitions) = 0;
 	virtual CmdIf::V1::CmdTypesIf::CmdResultCode executeCmd(const std::vector<std::string>& args, std::string& output) = 0;
-	virtual void printCmdHelp(const std::vector<CmdTableIf::CmdDefinition>& cmdDefinitions, std::string& output) = 0;
+	virtual void printCmdHelp(const std::vector<CmdTypesIf::CmdDefinition>& cmdDefinitions, std::string& output) = 0;
 
 	// Avoid copy/move constructors, assigments
 	CmdTableIf(const CmdTableIf&) 			= delete;

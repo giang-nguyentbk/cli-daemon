@@ -16,7 +16,7 @@
 #include <string>
 #include <mutex>
 
-#include "cmdTableIf.h"
+#include "cmdTypesIf.h"
 
 namespace CmdIf
 {
@@ -32,7 +32,7 @@ class GraphNode
 {
 public:
 	GraphNodeList			m_subNodeList;
-	CmdTableIf::CmdFunction		m_handler; // Only the last nodes of each graph hold the actual handler
+	CmdTypesIf::CmdFunction		m_handler; // Only the last node of each syntax path hold the actual handler
 	bool				m_anyValue;
 	std::string			m_name;
 
@@ -55,8 +55,8 @@ public:
 class CmdSyntaxGraph
 {
 public:
-	void addCommand(const std::string& cmdName, const std::vector<std::pair<std::string, CmdTableIf::CmdFunction>>& syntaxHandler);
-	const std::shared_ptr<CmdTableIf::CmdFunction> executeCmdHandler(size_t numArgs, std::vector<std::string>::const_iterator args, std::string& output) const;
+	void addCommand(const std::string& cmdName, const std::vector<std::pair<std::string, CmdTypesIf::CmdFunction>>& syntaxHandler);
+	const std::shared_ptr<CmdTypesIf::CmdFunction> findCmdHandler(size_t numArgs, std::vector<std::string>::const_iterator args, std::string& output) const;
 
 	CmdSyntaxGraph() = default;
 	virtual ~CmdSyntaxGraph() = default;
@@ -73,13 +73,16 @@ private:
 	static char splitOutSyntax(const char*& syntax, GraphNodeList& lastNodes);
 	static void appendNewNodeToLastNodes(const std::string& nodeName, GraphNodeList& lastNodes);
 	static bool validateBrackets(const std::string& syntax, char openBracket, char closeBracket);
-	void addSyntax(std::shared_ptr<GraphNode>& firstNode, const std::string& syntax, const CmdTableIf::CmdFunction& cmdHandler);
+	void addSyntax(std::shared_ptr<GraphNode>& firstNode, const std::string& syntax, const CmdTypesIf::CmdFunction& cmdHandler);
 	std::shared_ptr<GraphNode> evaluateCommandArguments(std::shared_ptr<GraphNode> currentNode, std::shared_ptr<std::string> validArgs, size_t numArgs, std::vector<std::string>::const_iterator args) const;
 	static void printfCorrectSyntax(std::shared_ptr<GraphNode> currentNode, std::string& output);
 
 private:
 	std::map<std::string, std::shared_ptr<GraphNode>> m_cmdMap; // Contain a list of graph trees with respective cmdNames
 	mutable std::mutex m_mutex; // To protect m_cmdMap when multiple threads want to add their cmds to
+
+public:
+	friend class CmdSyntaxGraphTest;
 
 }; // class CmdSyntaxGraph
 

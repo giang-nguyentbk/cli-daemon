@@ -233,7 +233,7 @@ bool CmdSyntaxGraph::validateBrackets(const std::string& syntax, char openBracke
 	return true;
 }
 
-void CmdSyntaxGraph::addSyntax(std::shared_ptr<GraphNode>& firstNode, const std::string& syntax, const CmdTableIf::CmdFunction& cmdHandler)
+void CmdSyntaxGraph::addSyntax(std::shared_ptr<GraphNode>& firstNode, const std::string& syntax, const CmdTypesIf::CmdFunction& cmdHandler)
 {
 	if(!validateBrackets(syntax, '{', '}') || !validateBrackets(syntax, '[', ']') || !validateBrackets(syntax, '<', '>'))
 	{
@@ -256,7 +256,7 @@ void CmdSyntaxGraph::addSyntax(std::shared_ptr<GraphNode>& firstNode, const std:
 
 }
 
-void CmdSyntaxGraph::addCommand(const std::string& cmdName, const std::vector<std::pair<std::string, CmdTableIf::CmdFunction>>& syntaxHandler)
+void CmdSyntaxGraph::addCommand(const std::string& cmdName, const std::vector<std::pair<std::string, CmdTypesIf::CmdFunction>>& syntaxHandler)
 {
 	std::scoped_lock<std::mutex> lock(m_mutex);
 
@@ -281,7 +281,7 @@ void CmdSyntaxGraph::addCommand(const std::string& cmdName, const std::vector<st
 std::shared_ptr<GraphNode> CmdSyntaxGraph::evaluateCommandArguments(std::shared_ptr<GraphNode> currentNode, std::shared_ptr<std::string> validArgs, size_t numArgs, std::vector<std::string>::const_iterator args) const
 {
 	// Go through all actual arguments (excluded the first argument which is the cmdName as well)
-	// The first argument should be already checked by executeCmdHandler()
+	// The first argument should be already checked by findCmdHandler()
 	for(size_t i = 0; i < numArgs; ++i)
 	{
 		GraphNodeList subnodes = currentNode->getMatchingSubnodes(args[i]);
@@ -338,7 +338,7 @@ std::shared_ptr<GraphNode> CmdSyntaxGraph::evaluateCommandArguments(std::shared_
 	return currentNode;
 }
 
-const std::shared_ptr<CmdTableIf::CmdFunction> CmdSyntaxGraph::executeCmdHandler(size_t numArgs, std::vector<std::string>::const_iterator args, std::string& output) const
+const std::shared_ptr<CmdTypesIf::CmdFunction> CmdSyntaxGraph::findCmdHandler(size_t numArgs, std::vector<std::string>::const_iterator args, std::string& output) const
 {
 	std::scoped_lock<std::mutex> lock(m_mutex);
 	
@@ -356,7 +356,7 @@ const std::shared_ptr<CmdTableIf::CmdFunction> CmdSyntaxGraph::executeCmdHandler
 
 	if(node && node->m_handler)
 	{
-		return std::make_shared<CmdTableIf::CmdFunction>(node->m_handler);
+		return std::make_shared<CmdTypesIf::CmdFunction>(node->m_handler);
 	}
 	else
 	{
@@ -383,51 +383,61 @@ void CmdSyntaxGraph::printfCorrectSyntax(std::shared_ptr<GraphNode> currentNode,
 		}
 		else if(numSubnodes == 1)
 		{
-			CmdTableIf::CmdFunction prevHandler = currentNode->m_handler;
+			/* Single child 
+									-> B has no child : Not possible, since B must contain cmdHandler!
+									|
+			Case 1:	... 	->	A	->	B 	-> B has single child (same as this case, will be recursively taken into account)
+									|
+									-> B has mutilple children : ... A B { ... | ... }
+
+									-> B has no child : Not possible, since B must contain cmdHandler!
+									|
+			Case 2:	... 	->	(A)	->	B 	-> B has single child (same as this case, will be recursively taken into account)
+									|
+									-> B has mutilple children : ... A [ B { ... | ... } ]
+			
+									-> B has no child : ... A B
+									|
+			Case 3:	... 	->	A	->	(B) 	-> B has single child (same as this case, will be recursively taken into account)
+									|
+									-> B has mutilple children : ... A B [ { ... | ... } ] 
+				
+									-> B has no child : ... A [ B ]
+									|
+			Case 4:	... 	->	(A)	->	(B) 	-> B has single child (same as this case, will be recursively taken into account)
+									|
+									-> B has mutilple children : ... A [ B [ { ... | ... } ] ]
+
+			=> Possible Syntax:
+				1. ... A B { ... | ... }
+				2. ... A [ B { ... | ... } ]
+				3. ... A B
+				4. ... A B [ { ... | ... } ]
+				5. ... A [ B ]
+				6. ... A [ B [ { ... | ... } ] ]
+
+			Note that: (A) meaning A is a node that contains cmdHandler
+			*/
+
+			CmdTypesIf::CmdFunction prevHandler = currentNode->m_handler;
 			currentNode = currentNode->m_subNodeList[0];
 
 			if(prevHandler && currentNode->m_handler && currentNode->m_subNodeList.size() == 0)
 			{
-				/* Single optional argument 
-				... 	A	->	B	->	C 
-							^		^
-							|		|
-							cmdHandler	cmdHandler
-
-				=> Possible commands:
-					1. ... A B
-					2. ... A B C
-
-				=> Syntax: ... A B [C]
-				*/
+				// Possible syntax 5 -> case 3 above
 				output += "[ ";
-				output += currentNode->m_name; // this is node "C" in above example
+				output += currentNode->m_name;
 				output += " ] ";
 			}
 			else
 			{
-				/*
-				... 	A	->	B	->	C	->	D	->	...
-					^				^		^
-					|				|		|
-					cmdHandler			cmdHandler	cmdHandler
-
-				=> Example situation:
-					1. A B 		: currentNode is A -> Add "B" into the output
-					2. B C 		: currentNode is B -> Add "C" into the output
-					2. C D ... 	: currentNode is C -> Add "D" into the output
-					2. B C 		: currentNode is B -> Add "C" into the output
-
-				*/
-
 				output += currentNode->m_name;
 				output += " ";
 			}
 		}
 		else if(numSubnodes == 2 &&
 			currentNode->m_subNodeList[0]->m_subNodeList.size() &&
-			currentNode->m_subNodeList[0]->findSubnode(currentNode->m_subNodeList[1]->m_name))
-			// currentNode->m_subNodeList[0]->m_subNodeList[0] == currentNode->m_subNodeList[1]) // First version
+			currentNode->m_subNodeList[0]->m_subNodeList[0] == currentNode->m_subNodeList[1])
 		{
 			/*
 					---------------------------------
@@ -452,15 +462,15 @@ void CmdSyntaxGraph::printfCorrectSyntax(std::shared_ptr<GraphNode> currentNode,
 		}
 		else
 		{
-			const char* altKey { "" };
+			std::string orKey { "" };
 			output += "{ ";
 
 			for(const auto& node : currentNode->m_subNodeList)
 			{
-				output += altKey;
+				output += orKey;
 				output += node->m_name;
 				output += " ";
-				altKey = "| ";
+				orKey = "| ";
 			}
 
 			output += " }";
