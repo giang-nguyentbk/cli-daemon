@@ -30,10 +30,16 @@ public:
 
 	using CmdFunction = std::function<CmdResultCode(const std::vector<std::string>& arguments, std::string& outputStream)>;
 
+	struct CmdFunctionWrapper
+	{
+		CmdTypesIf::CmdFunction func;
+		std::string funcName;
+	};
+
 	struct CmdDefinition
 	{
 		std::string m_syntax;
-		CmdTypesIf::CmdFunction m_handler;
+		CmdFunctionWrapper m_handler;
 		std::string m_desc;
 	};
 

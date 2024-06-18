@@ -32,7 +32,7 @@ class GraphNode
 {
 public:
 	GraphNodeList			m_subNodeList;
-	CmdTypesIf::CmdFunction		m_handler; // Only the last node of each syntax path hold the actual handler
+	CmdTypesIf::CmdFunctionWrapper	m_handler; // Only the last node of each syntax path hold the actual handler
 	bool				m_anyValue;
 	std::string			m_name;
 
@@ -55,8 +55,8 @@ public:
 class CmdSyntaxGraph
 {
 public:
-	void addCommand(const std::string& cmdName, const std::vector<std::pair<std::string, CmdTypesIf::CmdFunction>>& syntaxHandler);
-	const std::shared_ptr<CmdTypesIf::CmdFunction> findCmdHandler(size_t numArgs, std::vector<std::string>::const_iterator args, std::string& output) const;
+	void addCommand(const std::string& cmdName, const std::vector<std::pair<std::string, CmdTypesIf::CmdFunctionWrapper>>& syntaxHandler);
+	const std::shared_ptr<CmdTypesIf::CmdFunctionWrapper> findCmdHandler(size_t numArgs, std::vector<std::string>::const_iterator args, std::string& output) const;
 
 	CmdSyntaxGraph() = default;
 	virtual ~CmdSyntaxGraph() = default;
@@ -73,9 +73,10 @@ private:
 	static char splitOutSyntax(const char*& syntax, GraphNodeList& lastNodes);
 	static void appendNewNodeToLastNodes(const std::string& nodeName, GraphNodeList& lastNodes);
 	static bool validateBrackets(const std::string& syntax, char openBracket, char closeBracket);
-	void addSyntax(std::shared_ptr<GraphNode>& firstNode, const std::string& syntax, const CmdTypesIf::CmdFunction& cmdHandler);
+	void addSyntax(std::shared_ptr<GraphNode>& firstNode, const std::string& syntax, const CmdTypesIf::CmdFunctionWrapper& cmdHandler);
 	std::shared_ptr<GraphNode> evaluateCommandArguments(std::shared_ptr<GraphNode> currentNode, std::shared_ptr<std::string> validArgs, size_t numArgs, std::vector<std::string>::const_iterator args) const;
 	static void printfCorrectSyntax(std::shared_ptr<GraphNode> currentNode, std::string& output);
+	static void printGraphNodeList(const GraphNodeList& list);
 
 private:
 	std::map<std::string, std::shared_ptr<GraphNode>> m_cmdMap; // Contain a list of graph trees with respective cmdNames

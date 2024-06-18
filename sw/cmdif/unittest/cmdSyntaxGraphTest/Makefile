@@ -1,3 +1,10 @@
+# SDKSYSROOT is an env variable which should be exported by doing "source <path-to-SDK>/SDK-***/sysroot/env.sh
+# which is automatically done by running atbuild-sdk.sh"
+SDK_SYSROOT_DIR		:= $(SDKSYSROOT)
+SDK_USR_DIR		:= $(SDK_SYSROOT_DIR)/usr
+SDK_LIB_DIR		:= $(SDK_USR_DIR)/lib
+SDK_INC_DIR		:= $(SDK_USR_DIR)/include
+
 ROOT_DIR 	:= $(shell git rev-parse --show-toplevel)
 TARGET 		:= cmdSyntaxGraphTest
 BIN_DIR 	:= $(ROOT_DIR)/sw/cmdif/unittest/cmdSyntaxGraphTest/bin
@@ -8,7 +15,8 @@ CXX 		:= g++
 INCLUDE_DIR 	:= \
 		-I$(ROOT_DIR)/sw/cmdif/if \
 		-I$(ROOT_DIR)/sw/cmdif/inc \
-		-I$(ROOT_DIR)/sw/cmdif/unittest/cmdSyntaxGraphTest
+		-I$(ROOT_DIR)/sw/cmdif/unittest/cmdSyntaxGraphTest \
+		-I$(SDK_INC_DIR)
 
 SOURCE 		:= $(ROOT_DIR)/sw/cmdif/src/cmdSyntaxGraph.cc
 TEST 		:= $(ROOT_DIR)/sw/cmdif/unittest/cmdSyntaxGraphTest/cmdSyntaxGraphTest.cc
@@ -38,7 +46,7 @@ $(BIN_DIR)/cmdSyntaxGraphTest.o: $(TEST)
 
 $(BIN_DIR)/$(TARGET): $(OBJECTS)
 	@echo "  CXXLD \t $@"
-	@$(CXX) $^ -o $@
+	@$(CXX) $^ -L$(SDK_LIB_DIR) -ltraceifa -o $@
 
 run:
 	@$(BIN_DIR)/$(TARGET)

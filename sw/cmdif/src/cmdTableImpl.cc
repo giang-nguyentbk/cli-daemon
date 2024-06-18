@@ -9,7 +9,7 @@ namespace V1
 
 void CmdTableImpl::registerCmdTable(const std::string& cmdName, const std::vector<CmdTypesIf::CmdDefinition>& cmdDefinitions)
 {
-	std::vector<std::pair<std::string, CmdTypesIf::CmdFunction>> syntaxes;
+	std::vector<std::pair<std::string, CmdTypesIf::CmdFunctionWrapper>> syntaxes;
 	syntaxes.reserve(cmdDefinitions.size());
 	for(auto& cmdDef : cmdDefinitions)
 	{
@@ -23,11 +23,11 @@ CmdIf::V1::CmdTypesIf::CmdResultCode CmdTableImpl::executeCmd(const std::vector<
 {
 	auto res = CmdTypesIf::CmdResultCode::CMD_RET_FAIL;
 
-	const std::shared_ptr<CmdTypesIf::CmdFunction> handler = m_syntaxGraph.findCmdHandler(args.size(), args.cbegin(), output);
-	if(handler)
+	const std::shared_ptr<CmdTypesIf::CmdFunctionWrapper> handler = m_syntaxGraph.findCmdHandler(args.size(), args.cbegin(), output);
+	if(handler && (*handler).func)
 	{
 		// INFO TRACE: Executing command: 
-		res = (*handler)(args, output);
+		res = (*handler).func(args, output);
 	}
 
 	return res;

@@ -24,7 +24,14 @@ public:
 	CmdSyntaxGraphTest() = default;
 	virtual ~CmdSyntaxGraphTest() = default;
 
-	bool getNextTokenTest(const char*& syntax, std::string& token);
+	void getNextTokenTest(const char* syntax);
+	void splitOutSyntaxTest(const char* syntax);
+	std::shared_ptr<GraphNode> addSyntax(std::shared_ptr<GraphNode> firstNode, const char* syntax, const CmdTypesIf::CmdFunctionWrapper& cmdHandler);
+	void evaluateCommandArguments(std::shared_ptr<GraphNode> firstNode, const std::vector<std::string>& args);
+
+	CmdTypesIf::CmdResultCode mockCmdHandler(const std::vector<std::string>& arguments, std::string& outputStream);
+	CmdTypesIf::CmdResultCode mockCmdHandler2(const std::vector<std::string>& arguments, std::string& outputStream);
+	int mockCmdHandler4(int a, int b);
 
 private:
 	CmdSyntaxGraph m_syntaxGraph;
