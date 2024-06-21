@@ -1431,7 +1431,6 @@ static bool handle_receive_exe_cmd_reply(int sockfd, struct ethtcp_header *heade
 	output[rep->payload_length] = '\0';
 	
 	printf("Re-interpret TCP packet: cmd_output:\n%s\n", output);
-	printf("\n");
 
 	return true;
 }
