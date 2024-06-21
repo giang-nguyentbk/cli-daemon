@@ -37,7 +37,7 @@
 #define TCP_CLID_PORT		33333
 #define MAX_NUM_REMOTE_HOSTS	255
 #define CHECK_ALIVE_INTERVAL	15
-#define CMD_EXECUTION_TIMEOUT	90 // seconds
+#define CMD_EXECUTION_TIMEOUT	30 // seconds
 
 
 #define MUTEX_LOCK(lock)								\
@@ -133,7 +133,7 @@ static int compare_remotecmd_in_remotecmd_tree(const void *pa, const void *pb);
 static bool handle_receive_broadcast_msg(int sockfd);
 static void add_new_cmd_to_history_queue(char *cmd);
 static void destroy_history_queue(struct history_cmd_queue *hist_queue);
-static bool connect_to_remote_host_via_index(int index);
+static bool connect_to_remote_host_via_ipaddr(char *ip);
 static bool send_get_list_cmd_request(int sockfd);
 static int recv_data(int sockfd, void *rx_buff, int nr_bytes_to_read);
 static bool receive_get_list_cmd_reply(int sockfd);
@@ -216,9 +216,11 @@ int main(int argc, char* argv[])
 				} else
 				{
 					printf("Executing remote command %s...\n", m_args[0]);
-					send_exe_cmd_request(m_active_fd);
-
-					receive_exe_cmd_reply(m_active_fd);
+					if(m_active_fd != -1)
+					{
+						send_exe_cmd_request(m_active_fd);
+						receive_exe_cmd_reply(m_active_fd);
+					}
 				}
 			}
 		}
@@ -522,7 +524,7 @@ static bool setup_local_cmds(void)
 	strcpy(m_local_cmds[4].cmd, "connect");
 	m_local_cmds[4].handler = &local_connect;
 	strcpy(m_local_cmds[4].description, "Connect to remote device via an index returned by scan command.");
-	strcpy(m_local_cmds[4].syntax, "connect <index>");
+	strcpy(m_local_cmds[4].syntax, "connect { --idx <index> | --ip <ip> }");
 	
 	strcpy(m_local_cmds[5].cmd, "disconnect");
 	m_local_cmds[5].handler = &local_disconnect;
@@ -582,8 +584,7 @@ static bool local_exit(char **args)
 		return false;
 	}
 
-	printf("Exited the shell successfully!\n");
-
+	printf("Exited the shell successfully!\n\n");
 	m_is_exit = true;
 	return true;
 }
@@ -645,27 +646,50 @@ static bool local_scan(char **args)
 
 static bool local_connect(char **args)
 {
-	// (void)args;
+	char* ipaddr;
 	
-	if(m_nr_args != 2)
+	if(m_nr_args != 3)
 	{
-		printf("scan: Too few or many arguments!\n\n");
+		printf("scan: Invalid number of arguments!\n\n");
 		return false;
 	}
 
-	int index = atoi(args[1]);
-
-	if(index != 0)
+	if(strcmp(args[1], "--idx") == 0)
 	{
-		if(!connect_to_remote_host_via_index(index - 1)) // Index counted from 1
+		int index = atoi(args[2]);
+
+		if(index != 0)
 		{
+			MUTEX_LOCK(&m_remote_hosts_mtx);
+			if(index < 0 || index > MAX_NUM_REMOTE_HOSTS - 1)
+			{
+				printf("Index %d out of range!\n", index);
+				return false;
+			} else if(strcmp(m_remote_hosts[index - 1].ip, "0.0.0.0") == 0)
+			{
+				printf("Remote host for index %d not found in scan table!\n", index);
+				return false;
+			}
+
+			ipaddr = m_remote_hosts[index - 1].ip;
+			MUTEX_UNLOCK(&m_remote_hosts_mtx);
+			printf ("Connecting to device via index %d ...\n", index);
+		} else
+		{
+			printf("scan: Unknown argument %s!\n\n", args[2]);
 			return false;
 		}
+	} else if(strcmp(args[1], "--ip") == 0)
+	{
+		ipaddr = args[2];
+		printf ("Connecting to device via ipaddr %s ...\n", ipaddr);
 	} else
 	{
-		printf("scan: Unknown argument %s!\n\n", args[1]);
+		printf ("Error: Unknown option: %s\n", args[1]);
 		return false;
 	}
+
+	connect_to_remote_host_via_ipaddr(ipaddr);
 
 	printf("\n");
 	m_is_connected = true;
@@ -676,7 +700,6 @@ static bool local_disconnect(char **args)
 {
 	(void)args;
 	printf("Disconnecting from remote device...\n");
-	printf("\n");
 	m_is_connected = false;
 	
 	if(m_active_fd != -1)
@@ -698,7 +721,7 @@ static bool local_disconnect(char **args)
 
 	tdestroy(m_remote_cmd_tree, do_nothing);
 
-	printf("Disconnected from remote device successfully!\n");
+	printf("Disconnected from remote device successfully!\n\n");
 	return true;
 }
 
@@ -802,7 +825,6 @@ static void* udp_loop(void *data)
 			}
 		}
 		MUTEX_UNLOCK(&m_remote_hosts_mtx);
-
 
 		res = select(max_fd, &fdset, NULL, NULL, NULL);
 		if(res < 0)
@@ -1050,19 +1072,13 @@ static void destroy_history_queue(struct history_cmd_queue *hist_queue)
 	}
 }
 
-static bool connect_to_remote_host_via_index(int index)
+static bool connect_to_remote_host_via_ipaddr(char *ip)
 {
-	if(index < 0 || index > MAX_NUM_REMOTE_HOSTS - 1)
+	if(m_active_fd != -1)
 	{
-		printf("Index %d out of range!\n", index);
-		return false;
-	} else if(strcmp(m_remote_hosts[index].ip, "0.0.0.0") == 0)
-	{
-		printf("Remote host for index %d not found in scan table!\n", index);
-		return false;
+		printf("Another connection still alive!\nDisconnect it first before connecting to ip address %s!\n", ip);
+		return true;
 	}
-
-	printf ("Connecting to device...\n");
 
 	int sockfd = socket(AF_INET, SOCK_STREAM, 0);
 	if(sockfd < 0)
@@ -1074,7 +1090,7 @@ static bool connect_to_remote_host_via_index(int index)
 	struct sockaddr_in serveraddr;
 	memset(&serveraddr, 0, sizeof(struct sockaddr_in));
 	serveraddr.sin_family = AF_INET;
-	serveraddr.sin_addr.s_addr = inet_addr(m_remote_hosts[index].ip);
+	serveraddr.sin_addr.s_addr = inet_addr(ip);
 	serveraddr.sin_port = htons(TCP_CLID_PORT);
 
 	int res = connect(sockfd, (struct sockaddr *)((void *)&serveraddr), sizeof(struct sockaddr_in));
@@ -1085,9 +1101,9 @@ static bool connect_to_remote_host_via_index(int index)
 		return false;
 	}
 
-	strcpy(m_active_remote_ip, m_remote_hosts[index].ip);
+	strcpy(m_active_remote_ip, ip);
 	m_active_fd = sockfd;
-	printf("Connected to device: tcp://%s:%d\n", m_remote_hosts[index].ip, TCP_CLID_PORT);
+	printf("Connected to device: tcp://%s:%d\n", ip, TCP_CLID_PORT);
 
 	if(!send_get_list_cmd_request(sockfd))
 	{
@@ -1189,7 +1205,7 @@ static bool receive_get_list_cmd_reply(int sockfd)
 	switch (header->msgno)
 	{
 	case CLID_GET_LIST_CMD_REPLY:
-		printf("Received CLID_GET_LIST_CMD_REQUEST!\n");
+		printf("Received CLID_GET_LIST_CMD_REPLY!\n");
 		handle_receive_get_list_cmd_reply(sockfd, header);
 		break;
 	
@@ -1292,8 +1308,6 @@ static bool send_exe_cmd_request(int sockfd)
 	char cmds_buff[(strlen(m_args[0]) + 1) + 2 + m_nr_args*(MAX_ARG_LENGTH)]; // cmdName + num_args + series_of_args_in_string_format
 
 	len = strlen(m_args[0]) + 1; // Include '\0'
-	// *((uint16_t *)(&cmds_buff[total_len])) = len;
-	// total_len += 2;
 	strcpy(&cmds_buff[total_len], m_args[0]);
 	total_len += len;
 
@@ -1303,8 +1317,6 @@ static bool send_exe_cmd_request(int sockfd)
 	for(int i = 0; i < m_nr_args; i++)
 	{
 		len = strlen(m_args[i]) + 1; // Include '\0'
-		// *((uint16_t *)(&cmds_buff[total_len])) = len;
-		// total_len += 2;
 		strcpy(&cmds_buff[total_len], m_args[i]);
 		total_len += len;
 	}
@@ -1352,11 +1364,11 @@ static bool receive_exe_cmd_reply(int sockfd)
 
 	if(size == 0)
 	{
-		printf("Clid from this fd %d just disconnected!\n", sockfd);
+		printf("Remote device went down, please disconnect it!\n\n");
 		return true;
 	} else if(size < 0)
 	{
-		printf("Receive data from this clid failed, fd = %d!\n", sockfd);
+		printf("Receive data from this clid failed, fd = %d!\n\n", sockfd);
 		return false;
 	}
 
@@ -1377,7 +1389,7 @@ static bool receive_exe_cmd_reply(int sockfd)
 	switch (header->msgno)
 	{
 	case CLID_EXE_CMD_REPLY:
-		printf("Received CLID_GET_LIST_CMD_REQUEST!\n");
+		printf("Received CLID_EXE_CMD_REPLY!\n");
 		handle_receive_exe_cmd_reply(sockfd, header);
 		break;
 	
@@ -1423,8 +1435,6 @@ static bool handle_receive_exe_cmd_reply(int sockfd, struct ethtcp_header *heade
 
 	return true;
 }
-
-
 
 
 

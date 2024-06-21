@@ -28,6 +28,7 @@
 struct CmdIfRegCmdRequestS
 {
 	uint32_t msgno;
+	itc_mbox_id_t mbox_id;
 	char cmd_name[MAX_CMD_NAME_LENGTH];
 	char cmd_desc[1];
 };

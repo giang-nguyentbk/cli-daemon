@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <sstream>
 #include <vector>
 #include <string>
 #include <memory>
@@ -25,8 +26,8 @@ class CmdJobIf
 {
 public:
 	virtual const std::string& getCmdName() const = 0;
-	virtual const std::vector<std::string>& getArgs() const = 0;
-	virtual std::string& getOutputStream() = 0;
+	virtual const std::vector<std::string>& getArguments() const = 0;
+	virtual std::ostringstream& getOutputStream() = 0;
 	virtual void done(const CmdIf::V1::CmdTypesIf::CmdResultCode& rc) = 0;
 
 	// Avoid copy/move constructors, assigments

@@ -36,9 +36,9 @@ public:
 
 	static CmdRegisterIf& getInstance();
 
-	using CmdCallback = std::function<void(std::shared_ptr<CmdIf::V1::CmdJobIf> job)>;
+	using CmdInvoker = std::function<void(const std::shared_ptr<CmdIf::V1::CmdJobIf>& job)>;
 
-	virtual ReturnCode registerCmdHandler(const std::string& cmdName, const std::string& cmdDesc, const CmdCallback& cmdHandler) = 0;
+	virtual ReturnCode registerCmdHandler(const std::string& cmdName, const std::string& cmdDesc, const CmdInvoker& cmdHandler) = 0;
 	virtual ReturnCode deregisterCmdHandler(const std::string& cmdName) = 0;
 	
 	// Avoid copy/move constructors, assigments

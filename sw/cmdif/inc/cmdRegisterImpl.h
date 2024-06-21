@@ -43,14 +43,13 @@ public:
 	CmdRegisterImpl& operator=(const CmdRegisterImpl&) 	= delete;
 	CmdRegisterImpl& operator=(CmdRegisterImpl&&) 		= delete;
 
-	ReturnCode registerCmdHandler(const std::string& cmdName, const std::string& cmdDesc, const CmdCallback& cmdHandler) override;
+	ReturnCode registerCmdHandler(const std::string& cmdName, const std::string& cmdDesc, const CmdInvoker& cmdHandler) override;
 	ReturnCode deregisterCmdHandler(const std::string& cmdName) override;
 
 private:
 	void init();
-	using CmdInvoker = std::function<void(const std::shared_ptr<CmdIf::V1::CmdJobIf>& job)>;
 
-	void invokeCmd(const std::shared_ptr<CmdIf::V1::CmdJobIf>& job, const CmdRegisterIf::CmdCallback& cmdHandler);
+	void invokeCmd(const std::shared_ptr<CmdIf::V1::CmdJobIf>& job, const CmdInvoker& cmdHandler);
 	void handleExeCmdRequest(const std::shared_ptr<union itc_msg>& msg);
 
 private:

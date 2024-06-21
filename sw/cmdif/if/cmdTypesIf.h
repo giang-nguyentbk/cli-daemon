@@ -28,7 +28,7 @@ public:
 		CMD_RET_FAIL
 	};
 
-	using CmdFunction = std::function<CmdResultCode(const std::vector<std::string>& arguments, std::string& outputStream)>;
+	using CmdFunction = std::function<CmdResultCode(const std::vector<std::string>& arguments, std::ostringstream& outputStream)>;
 
 	struct CmdFunctionWrapper
 	{

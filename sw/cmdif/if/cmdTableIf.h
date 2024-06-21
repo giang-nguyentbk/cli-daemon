@@ -13,6 +13,7 @@
 #include <memory>
 #include <vector>
 #include <string>
+#include <sstream>
 
 #include "cmdTypesIf.h"
 
@@ -27,13 +28,9 @@ class CmdTableIf
 public:
 	static CmdTableIf& getInstance();
 
-	
-
-	
-
 	virtual void registerCmdTable(const std::string& cmdName, const std::vector<CmdTypesIf::CmdDefinition>& cmdDefinitions) = 0;
-	virtual CmdIf::V1::CmdTypesIf::CmdResultCode executeCmd(const std::vector<std::string>& args, std::string& output) = 0;
-	virtual void printCmdHelp(const std::vector<CmdTypesIf::CmdDefinition>& cmdDefinitions, std::string& output) = 0;
+	virtual CmdIf::V1::CmdTypesIf::CmdResultCode executeCmd(const std::vector<std::string>& args, std::ostringstream& output) = 0;
+	virtual void printCmdHelp(const std::vector<CmdTypesIf::CmdDefinition>& cmdDefinitions, std::ostringstream& output) = 0;
 
 	// Avoid copy/move constructors, assigments
 	CmdTableIf(const CmdTableIf&) 			= delete;

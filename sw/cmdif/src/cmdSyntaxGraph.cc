@@ -4,6 +4,7 @@
 #include <vector>
 #include <map>
 #include <functional>
+#include <sstream>
 
 #include <traceIf.h>
 
@@ -315,7 +316,7 @@ void CmdSyntaxGraph::addCommand(const std::string& cmdName, const std::vector<st
 	
 }
 
-std::shared_ptr<GraphNode> CmdSyntaxGraph::evaluateCommandArguments(std::shared_ptr<GraphNode> currentNode, std::shared_ptr<std::string> validArgs, size_t numArgs, std::vector<std::string>::const_iterator args) const
+std::shared_ptr<GraphNode> CmdSyntaxGraph::evaluateCommandArguments(std::shared_ptr<GraphNode> currentNode, std::shared_ptr<std::ostringstream> validArgs, size_t numArgs, std::vector<std::string>::const_iterator args) const
 {
 	// Go through all actual arguments (excluded the first argument which is the cmdName as well)
 	// The first argument should be already checked by findCmdHandler()
@@ -327,7 +328,7 @@ std::shared_ptr<GraphNode> CmdSyntaxGraph::evaluateCommandArguments(std::shared_
 		if(numSubnodes == 0)
 		{
 			// No matching subnodes found in this potential path: skip all remaining arguments
-			TPT_TRACE(TRACE_ABN, "No matching node found, return current node %s!", (currentNode->m_name).c_str());
+			TPT_TRACE(TRACE_ABN, "No matching node found, return current node \"%s\"!", (currentNode->m_name).c_str());
 			return currentNode;
 		}
 		else if(numSubnodes == 1)
@@ -336,7 +337,7 @@ std::shared_ptr<GraphNode> CmdSyntaxGraph::evaluateCommandArguments(std::shared_
 			if(subnodes[0]->m_handler.func && numArgs == i + 1)
 			{
 				// check if it's the last one in the path which should have the cmdHandler
-				TPT_TRACE(TRACE_INFO, "Found cmdHandler on node %s!", (subnodes[0]->m_name).c_str());
+				TPT_TRACE(TRACE_INFO, "Found cmdHandler on node \"%s\"!", (subnodes[0]->m_name).c_str());
 				return subnodes[0]; // cmdHandler found, finish!
 			}
 
@@ -344,8 +345,7 @@ std::shared_ptr<GraphNode> CmdSyntaxGraph::evaluateCommandArguments(std::shared_
 			currentNode = subnodes[0];
 			if(validArgs)
 			{
-				*validArgs += currentNode->m_name;
-				*validArgs += " ";
+				*validArgs << currentNode->m_name << " ";
 			}
 		}
 		else
@@ -358,7 +358,7 @@ std::shared_ptr<GraphNode> CmdSyntaxGraph::evaluateCommandArguments(std::shared_
 				std::shared_ptr<GraphNode> sn = evaluateCommandArguments(subnode, nullptr, numArgs - (i + 1), args + (i + 1)); // First version
 				if(sn && sn->m_handler.func)
 				{
-					TPT_TRACE(TRACE_INFO, "Found cmdHandler on deeper node %s!", (sn->m_name).c_str());
+					TPT_TRACE(TRACE_INFO, "Found cmdHandler on deeper node \"%s\"!", (sn->m_name).c_str());
 					return sn; // cmdHandler found, finish!
 				}
 			}
@@ -366,21 +366,20 @@ std::shared_ptr<GraphNode> CmdSyntaxGraph::evaluateCommandArguments(std::shared_
 			// Even if after digging deeper into all above subnodes's path we cannot find the last node that contains cmdHandler, we must give up here!
 			if(validArgs)
 			{
-				*validArgs += args[i];
-				*validArgs += " ";
+				*validArgs << args[i] << " ";
 			}
 			
-			TPT_TRACE(TRACE_ABN, "Could not find cmdHandler, return default node %s!", (subnodes[0]->m_name).c_str());
+			TPT_TRACE(TRACE_ABN, "Could not find cmdHandler, return default node \"%s\"!", (subnodes[0]->m_name).c_str());
 			return subnodes[0]; // If failed, by default choose the first subnode of subnodes to start printing a correct syntax
 		}
 	}
 
 	// All actual arguments have been checked and just found one path that match those arguments
-	TPT_TRACE(TRACE_INFO, "Return with node %s!", (currentNode->m_name).c_str());
+	TPT_TRACE(TRACE_INFO, "Return with node \"%s\"!", (currentNode->m_name).c_str());
 	return currentNode;
 }
 
-const std::shared_ptr<CmdTypesIf::CmdFunctionWrapper> CmdSyntaxGraph::findCmdHandler(size_t numArgs, std::vector<std::string>::const_iterator args, std::string& output) const
+const std::shared_ptr<CmdTypesIf::CmdFunctionWrapper> CmdSyntaxGraph::findCmdHandler(size_t numArgs, std::vector<std::string>::const_iterator args, std::ostringstream& output) const
 {
 	std::scoped_lock<std::mutex> lock(m_mutex);
 	
@@ -391,8 +390,8 @@ const std::shared_ptr<CmdTypesIf::CmdFunctionWrapper> CmdSyntaxGraph::findCmdHan
 		return nullptr;
 	}
 	
-	std::shared_ptr<std::string> validArgs = std::make_shared<std::string>(firstNodeIter->first);
-	*validArgs += " ";
+	std::shared_ptr<std::ostringstream> validArgs = std::make_shared<std::ostringstream>();
+	*validArgs << firstNodeIter->first << " ";
 
 	std::shared_ptr<GraphNode> node = evaluateCommandArguments(firstNodeIter->second, validArgs, numArgs - 1, args + 1);
 
@@ -402,18 +401,17 @@ const std::shared_ptr<CmdTypesIf::CmdFunctionWrapper> CmdSyntaxGraph::findCmdHan
 	}
 	else
 	{
-		output += "Usage: ";
-		output += *validArgs;
+		output << "Usage: " << (*validArgs).str();
 		// Continuously add the correct syntax after validArgs to the output
-		printfCorrectSyntax(node, output);
-		output += "\n\n";
+		printNextPossibleArguments(node, output);
+		output << "\n\n";
 
 		return nullptr;
 	}
 
 }
 
-void CmdSyntaxGraph::printfCorrectSyntax(std::shared_ptr<GraphNode> currentNode, std::string& output)
+void CmdSyntaxGraph::printNextPossibleArguments(std::shared_ptr<GraphNode> currentNode, std::ostringstream& output)
 {
 	while(currentNode)
 	{
@@ -467,14 +465,11 @@ void CmdSyntaxGraph::printfCorrectSyntax(std::shared_ptr<GraphNode> currentNode,
 			if(prevHandler.func && currentNode->m_handler.func && currentNode->m_subNodeList.size() == 0)
 			{
 				// Possible syntax 5 -> case 3 above
-				output += "[ ";
-				output += currentNode->m_name;
-				output += " ] ";
+				output << "[ " << currentNode->m_name << " ] ";
 			}
 			else
 			{
-				output += currentNode->m_name;
-				output += " ";
+				output << currentNode->m_name << " ";
 			}
 		}
 		else if(numSubnodes == 2 &&
@@ -496,26 +491,26 @@ void CmdSyntaxGraph::printfCorrectSyntax(std::shared_ptr<GraphNode> currentNode,
 
 			const std::string& optKey = currentNode->m_subNodeList[0]->m_name;
 			currentNode = currentNode->m_subNodeList[1];
-			output += "[ ";
-			output += optKey;
-			output += " ] ";
-			output += currentNode->m_name;
-			output += " ";
+			output << "[ " << optKey << " ] " << currentNode->m_name << " ";
 		}
 		else
 		{
 			std::string orKey { "" };
-			output += "{ ";
+			output << "{ ";
 
 			for(const auto& node : currentNode->m_subNodeList)
 			{
-				output += orKey;
-				output += node->m_name;
-				output += " ";
+				output << orKey << node->m_name;
+
+				if(node != currentNode->m_subNodeList[currentNode->m_subNodeList.size() - 1])
+				{
+					output << " ";
+				}
+
 				orKey = "| ";
 			}
 
-			output += " }";
+			output << " }";
 			break;
 		}
 	}
@@ -526,7 +521,7 @@ void CmdSyntaxGraph::printGraphNodeList(const GraphNodeList& list)
 	TPT_TRACE(TRACE_INFO, "This GraphNodeList has %lu nodes!", list.size());
 	for(const auto& node : list)
 	{
-		TPT_TRACE(TRACE_INFO, "Node: %s", (node->m_name).c_str());
+		TPT_TRACE(TRACE_INFO, "Node: \"%s\"", (node->m_name).c_str());
 	}
 }
 

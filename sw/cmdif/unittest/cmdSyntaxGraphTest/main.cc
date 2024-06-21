@@ -1,6 +1,7 @@
 #include <iostream>
 #include <string>
 #include <functional>
+#include <sstream>
 
 #include "cmdSyntaxGraphTest.h"
 
@@ -19,13 +20,13 @@ int main()
 {
 	CmdSyntaxGraphTest syntaxGraphTest;
 
-	std::vector<std::string> arguments {"abc", "ghi", "11"};
-	std::string outputStream;
+	std::vector<std::string> arguments {"abc", "def"};
+	std::ostringstream outputStream;
 
 	// const char* syntax1 = "abc { def | ghi } jkl";
 	const char* syntax2 = "abc [ def | ghi <jkl> | ghi <jkl> | { mno | pqr } ]";
 	// const char* syntax3 = "abc { def | ghi jkl";
-	const char* syntax4 = "abc [ stu ]";
+	const char* syntax4 = "abc [ vwy ] def";
 
 	std::shared_ptr<GraphNode> firstNode = std::make_shared<GraphNode>("abc");
 
@@ -52,6 +53,8 @@ int main()
 	(firstNode->m_handler.func)(arguments, outputStream);
 
 	syntaxGraphTest.evaluateCommandArguments(firstNode, arguments);
+
+	syntaxGraphTest.printNextPossibleArgumentsTest(firstNode);
 
 	return 0;
 }

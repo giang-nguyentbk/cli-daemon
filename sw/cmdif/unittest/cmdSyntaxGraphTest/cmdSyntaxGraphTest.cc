@@ -79,8 +79,8 @@ std::shared_ptr<GraphNode> CmdSyntaxGraphTest::addSyntax(std::shared_ptr<GraphNo
 
 void CmdSyntaxGraphTest::evaluateCommandArguments(std::shared_ptr<GraphNode> firstNode, const std::vector<std::string>& args)
 {
-	std::shared_ptr<std::string> validArgs = std::make_shared<std::string>(firstNode->m_name);
-	*validArgs += " ";
+	std::shared_ptr<std::ostringstream> validArgs = std::make_shared<std::ostringstream>();
+	*validArgs << firstNode->m_name << " ";
 
 	std::cout << "Input: " << (firstNode->m_name).c_str() << std::endl;
 	std::cout << std::endl;
@@ -99,7 +99,24 @@ void CmdSyntaxGraphTest::evaluateCommandArguments(std::shared_ptr<GraphNode> fir
 	std::cout << std::endl;
 }
 
-CmdTypesIf::CmdResultCode CmdSyntaxGraphTest::mockCmdHandler(const std::vector<std::string>& arguments, std::string& outputStream)
+void CmdSyntaxGraphTest::printNextPossibleArgumentsTest(std::shared_ptr<GraphNode> currentNode)
+{
+	std::cout << "Input: " << (currentNode->m_name).c_str() << std::endl;
+	std::cout << std::endl;
+
+	std::ostringstream output;
+	std::cout << "Output:" << std::endl;
+	m_syntaxGraph.printNextPossibleArguments(currentNode, output);
+	
+	std::cout << "[OK]:       " << output.str() << std::endl;
+
+	std::cout << std::endl;
+	
+	std::cout << "================================================" << std::endl;
+	std::cout << std::endl;
+}
+
+CmdTypesIf::CmdResultCode CmdSyntaxGraphTest::mockCmdHandler(const std::vector<std::string>& arguments, std::ostringstream& outputStream)
 {
 	(void)arguments;
 	(void)outputStream;
@@ -107,20 +124,12 @@ CmdTypesIf::CmdResultCode CmdSyntaxGraphTest::mockCmdHandler(const std::vector<s
 	return CmdTypesIf::CmdResultCode::CMD_RET_SUCCESS;
 }
 
-CmdTypesIf::CmdResultCode CmdSyntaxGraphTest::mockCmdHandler2(const std::vector<std::string>& arguments, std::string& outputStream)
+CmdTypesIf::CmdResultCode CmdSyntaxGraphTest::mockCmdHandler2(const std::vector<std::string>& arguments, std::ostringstream& outputStream)
 {
 	(void)arguments;
 	(void)outputStream;
 	std::cout << "cmdHandler2 get called!" << std::endl;
 	return CmdTypesIf::CmdResultCode::CMD_RET_FAIL;
-}
-
-int CmdSyntaxGraphTest::mockCmdHandler4(int a, int b)
-{
-	(void)a;
-	(void)b;
-	std::cout << "cmdHandler4 get called!" << std::endl;
-	return a;
 }
 
 } // namespace V1

@@ -15,6 +15,7 @@
 #include <functional>
 #include <string>
 #include <mutex>
+#include <sstream>
 
 #include "cmdTypesIf.h"
 
@@ -56,7 +57,7 @@ class CmdSyntaxGraph
 {
 public:
 	void addCommand(const std::string& cmdName, const std::vector<std::pair<std::string, CmdTypesIf::CmdFunctionWrapper>>& syntaxHandler);
-	const std::shared_ptr<CmdTypesIf::CmdFunctionWrapper> findCmdHandler(size_t numArgs, std::vector<std::string>::const_iterator args, std::string& output) const;
+	const std::shared_ptr<CmdTypesIf::CmdFunctionWrapper> findCmdHandler(size_t numArgs, std::vector<std::string>::const_iterator args, std::ostringstream& output) const;
 
 	CmdSyntaxGraph() = default;
 	virtual ~CmdSyntaxGraph() = default;
@@ -74,8 +75,8 @@ private:
 	static void appendNewNodeToLastNodes(const std::string& nodeName, GraphNodeList& lastNodes);
 	static bool validateBrackets(const std::string& syntax, char openBracket, char closeBracket);
 	void addSyntax(std::shared_ptr<GraphNode>& firstNode, const std::string& syntax, const CmdTypesIf::CmdFunctionWrapper& cmdHandler);
-	std::shared_ptr<GraphNode> evaluateCommandArguments(std::shared_ptr<GraphNode> currentNode, std::shared_ptr<std::string> validArgs, size_t numArgs, std::vector<std::string>::const_iterator args) const;
-	static void printfCorrectSyntax(std::shared_ptr<GraphNode> currentNode, std::string& output);
+	std::shared_ptr<GraphNode> evaluateCommandArguments(std::shared_ptr<GraphNode> currentNode, std::shared_ptr<std::ostringstream> validArgs, size_t numArgs, std::vector<std::string>::const_iterator args) const;
+	static void printNextPossibleArguments(std::shared_ptr<GraphNode> currentNode, std::ostringstream& output);
 	static void printGraphNodeList(const GraphNodeList& list);
 
 private:

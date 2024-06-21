@@ -9,6 +9,8 @@
 
 #pragma once
 
+#include <sstream>
+
 #include "cmdSyntaxGraph.h"
 
 
@@ -28,10 +30,10 @@ public:
 	void splitOutSyntaxTest(const char* syntax);
 	std::shared_ptr<GraphNode> addSyntax(std::shared_ptr<GraphNode> firstNode, const char* syntax, const CmdTypesIf::CmdFunctionWrapper& cmdHandler);
 	void evaluateCommandArguments(std::shared_ptr<GraphNode> firstNode, const std::vector<std::string>& args);
+	void printNextPossibleArgumentsTest(std::shared_ptr<GraphNode> currentNode);
 
-	CmdTypesIf::CmdResultCode mockCmdHandler(const std::vector<std::string>& arguments, std::string& outputStream);
-	CmdTypesIf::CmdResultCode mockCmdHandler2(const std::vector<std::string>& arguments, std::string& outputStream);
-	int mockCmdHandler4(int a, int b);
+	CmdTypesIf::CmdResultCode mockCmdHandler(const std::vector<std::string>& arguments, std::ostringstream& outputStream);
+	CmdTypesIf::CmdResultCode mockCmdHandler2(const std::vector<std::string>& arguments, std::ostringstream& outputStream);
 
 private:
 	CmdSyntaxGraph m_syntaxGraph;

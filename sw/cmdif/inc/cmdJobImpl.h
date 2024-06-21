@@ -32,12 +32,12 @@ public:
 		return m_cmdName;
 	}
 
-	const std::vector<std::string>& getArgs() const override
+	const std::vector<std::string>& getArguments() const override
 	{
 		return m_args;
 	}
 
-	std::string& getOutputStream() override
+	std::ostringstream& getOutputStream() override
 	{
 		return m_output;
 	}
@@ -55,7 +55,7 @@ private:
 	unsigned long long m_jobId;
 	std::vector<std::string> m_args;
 	itc_mbox_id_t m_clidMboxId;
-	std::string m_output;
+	std::ostringstream m_output;
 
 }; // class CmdJobImpl
 

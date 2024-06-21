@@ -281,6 +281,9 @@ static void clid_exit_handler(void)
 
 	close(clid_inst.tcp_fd);
 	tdestroy(clid_inst.client_tree, do_nothing);
+	tdestroy(clid_inst.cmd_tree, do_nothing);
+	itc_delete_mailbox(clid_inst.mbox_id);
+	itc_exit();
 	
 	TPT_TRACE(TRACE_INFO, "CLID exit handler finished!");
 }
@@ -317,7 +320,7 @@ static bool setup_mailbox(void)
 		return false;
 	}
 
-	clid_inst.mbox_fd = itc_get_fd(clid_inst.mbox_id);
+	clid_inst.mbox_fd = itc_get_fd();
 	TPT_TRACE(TRACE_INFO, "Create TCP server mailbox \"%s\" successfully!", CLID_MBOX_NAME);
 	return true;
 }
@@ -612,7 +615,7 @@ static bool handle_receive_tcp_packet(int sockfd)
 		break;
 	
 	case CLID_EXE_CMD_REQUEST:
-		TPT_TRACE(TRACE_INFO, "Received CLID_GET_LIST_CMD_REQUEST!");
+		TPT_TRACE(TRACE_INFO, "Received CLID_EXE_CMD_REQUEST!");
 		handle_receive_exe_cmd_request(sockfd, header);
 		break;
 	
@@ -657,7 +660,7 @@ static bool release_shell_client_resources(int sockfd)
 	close(sockfd);
 	(*iter)->fd = -1;
 
-	if(!set_time_job_timer((*iter)->job_timer_fd, 0))
+	if((*iter)->job_timer_fd != -1 && !set_time_job_timer((*iter)->job_timer_fd, 0))
 	{
 		TPT_TRACE(TRACE_ERROR, "Could not stop job timer fd = %d!", (*iter)->job_timer_fd);
 		return false;
@@ -728,16 +731,11 @@ static bool handle_receive_exe_cmd_request(int sockfd, struct ethtcp_header *hea
 	TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: payload_length: %u", req->payload_length);
 
 	unsigned long offset = 0;
-	uint16_t cmd_name_len = 0;
 	char cmd_name[MAX_CMD_NAME_LENGTH];
 
-	cmd_name_len = *((uint16_t *)(req->payload + offset));
-	// offset += 2;
-	TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: cmd_name_len: %hu", cmd_name_len);
 	strcpy(cmd_name, (req->payload + offset));
-	// memcpy(cmd_name, (req->payload + offset), cmd_name_len);
-	// cmd_name[cmd_name_len] = '\0';
-	offset += cmd_name_len;
+	TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: cmd_name_len: %hu", strlen(cmd_name));
+	offset += strlen(cmd_name) + 1;
 	TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: cmd_name: %s", cmd_name);
 
 	uint16_t num_args = *((uint16_t *)(req->payload + offset));
@@ -748,18 +746,13 @@ static bool handle_receive_exe_cmd_request(int sockfd, struct ethtcp_header *hea
 	uint32_t payload_len = req->payload_length - offset;
 
 	/* DEBUG PURPOSE ONLY */
-	uint16_t arg_len = 0;
 	char args[MAX_CMD_NAME_LENGTH];
 	for(int i = 0; i < num_args; i++)
 	{
 		/* This is arguments */
-		arg_len = *((uint16_t *)(req->payload + offset));
-		// offset += 2;
 		strcpy(args, (req->payload + offset));
-		// memcpy(args, (req->payload + offset), arg_len);
-		// args[arg_len] = '\0';
-		offset += arg_len;
-		TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: arg_len %d: %hu", i, arg_len);
+		offset += strlen(args);
+		TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: arg_len %d: %hu", i, strlen(args));
 		TPT_TRACE(TRACE_INFO, "Re-interpret TCP packet: args %d: %s", i, args);
 	}
 
@@ -862,7 +855,7 @@ static bool send_exe_cmd_reply(int sockfd, uint32_t result, char *output)
 
 	uint32_t output_len = strlen(output);
 
-	size_t msg_len = offsetof(struct ethtcp_msg, payload) + offsetof(struct clid_exe_cmd_reply, payload) + output_len;
+	size_t msg_len = offsetof(struct ethtcp_msg, payload) + offsetof(struct clid_exe_cmd_reply, payload) + output_len + 1;
 	struct ethtcp_msg *rep = malloc(msg_len);
 	if(rep == NULL)
 	{
@@ -1006,6 +999,7 @@ static bool handle_receive_itc_msg(int mbox_fd)
 	switch (msg->msgno)
 	{
 	case CMDIF_REG_CMD_REQUEST:
+		TPT_TRACE(TRACE_INFO, "Received CMDIF_REG_CMD_REQUEST mbox_id = 0x%08x", msg->cmdIfRegCmdRequest.mbox_id);
 		TPT_TRACE(TRACE_INFO, "Received CMDIF_REG_CMD_REQUEST cmd_name = %s", msg->cmdIfRegCmdRequest.cmd_name);
 		TPT_TRACE(TRACE_INFO, "Received CMDIF_REG_CMD_REQUEST cmd_desc = %s", msg->cmdIfRegCmdRequest.cmd_desc);
 		handle_receive_reg_cmd_request(msg);
@@ -1045,10 +1039,11 @@ static bool handle_receive_reg_cmd_request(union itc_msg *msg)
 	{
 		if(clid_inst.cmds[i].cmd_name[0] == '\0')
 		{
-			clid_inst.cmds[i].mbox_id = itc_sender(msg);
+			clid_inst.cmds[i].mbox_id = msg->cmdIfRegCmdRequest.mbox_id;
 			strcpy(clid_inst.cmds[i].cmd_name, msg->cmdIfRegCmdRequest.cmd_name);
 			strcpy(clid_inst.cmds[i].cmd_desc, msg->cmdIfRegCmdRequest.cmd_desc);
 			tsearch(&clid_inst.cmds[i], &clid_inst.cmd_tree, compare_command_in_cmd_tree);
+			clid_inst.cmd_count++;
 			break;
 		}
 	}
@@ -1091,9 +1086,17 @@ static bool forward_exe_cmd_request(unsigned long long job_id, char *cmd_name, u
 		return true;
 	}
 
-	union itc_msg* fwd = itc_alloc(offsetof(struct CmdIfExeCmdRequestS, payload) +  pl_len, CMDIF_EXE_CMD_REQUEST);
+	union itc_msg* fwd = itc_alloc(offsetof(struct CmdIfExeCmdRequestS, payload) + pl_len, CMDIF_EXE_CMD_REQUEST);
+
+	// TPT_TRACE(TRACE_DEBUG, "fwd = 0x%016x", fwd);
+	// TPT_TRACE(TRACE_DEBUG, "job_id = 0x%016x", &(fwd->cmdIfExeCmdRequest.job_id));
+	// TPT_TRACE(TRACE_DEBUG, "cmd_name = 0x%016x", (unsigned long long)(fwd->cmdIfExeCmdRequest.cmd_name));
+	// TPT_TRACE(TRACE_DEBUG, "num_args = 0x%016x", &(fwd->cmdIfExeCmdRequest.num_args));
+	// TPT_TRACE(TRACE_DEBUG, "payloadLen = 0x%016x", &(fwd->cmdIfExeCmdRequest.payloadLen));
+	// TPT_TRACE(TRACE_DEBUG, "payload = 0x%016x", (unsigned long long)(fwd->cmdIfExeCmdRequest.payload));
 
 	fwd->cmdIfExeCmdRequest.job_id = job_id;
+	memset(fwd->cmdIfExeCmdRequest.cmd_name, 0, MAX_CMD_NAME_LENGTH);
 	strcpy(fwd->cmdIfExeCmdRequest.cmd_name, cmd_name);
 	fwd->cmdIfExeCmdRequest.num_args = num_args;
 	fwd->cmdIfExeCmdRequest.payloadLen = pl_len;
@@ -1132,7 +1135,7 @@ static bool handle_receive_exe_cmd_reply(union itc_msg *msg)
 	}
 
 	// Done this job execution, stop the respective job timer and unset current_job_id.
-	if(!set_time_job_timer((*iter)->job_timer_fd, 0))
+	if((*iter)->job_timer_fd != -1 && !set_time_job_timer((*iter)->job_timer_fd, 0))
 	{
 		TPT_TRACE(TRACE_ERROR, "Could not stop job timer fd = %d!", (*iter)->job_timer_fd);
 		return false;
@@ -1151,6 +1154,12 @@ static bool handle_job_timer_expired(int timerfd)
 	{
 		TPT_TRACE(TRACE_ABN, "Job timer fd = %d not found in client tree, something wrong!", timerfd);
 		return true;
+	}
+
+	char *output = "Expired!";
+	if(!send_exe_cmd_reply((*iter)->fd, (uint32_t)CMDIF_RET_FAIL, output))
+	{
+		return false;
 	}
 
 	(*iter)->current_job_id = 0;
