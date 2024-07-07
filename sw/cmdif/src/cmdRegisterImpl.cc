@@ -10,20 +10,16 @@
 #include <itc.h>
 #include <itcPubSubIf.h>
 #include <traceIf.h>
+#include <stringUtils.h>
 
+#include "cli-daemon-tpt-provider.h"
 #include "cmdRegisterImpl.h"
 #include "cmdJobImpl.h"
 #include "cmdTypesIf.h"
 #include "cmdProto.h"
 
-namespace // anonymous namespace
-{
-
-using namespace CmdIf::V1;
-
-
-
-} // anonymous namespace
+using namespace UtilsFramework::ItcPubSub::V1;
+using namespace CommonUtils::V1::StringUtils;
 
 namespace CmdIf
 {
@@ -31,7 +27,6 @@ namespace CmdIf
 namespace V1
 {
 
-using namespace UtilsFramework::ItcPubSub::V1;
 
 CmdRegisterIf& CmdRegisterIf::getInstance()
 {
@@ -87,16 +82,16 @@ CmdRegisterIf::ReturnCode CmdRegisterImpl::registerCmdHandler(const std::string&
 
 		if(!itc_send(&req, m_clidMboxId, ITC_MY_MBOX_ID, NULL))
 		{
-			TPT_TRACE(TRACE_ERROR, "Failed to send CMDIF_REG_CMD_REQUEST to clid for cmdName = %s!", cmdName.c_str());
+			TPT_TRACE(TRACE_ERROR, SSTR("Failed to send CMDIF_REG_CMD_REQUEST to clid for cmdName = \"", cmdName, "\""));
 			return CmdRegisterIf::ReturnCode::INTERNAL_ERROR;
 		}
 
-		TPT_TRACE(TRACE_INFO, "Send CMDIF_REG_CMD_REQUEST to clid successfully!");
+		TPT_TRACE(TRACE_INFO, SSTR("Send CMDIF_REG_CMD_REQUEST to clid successfully!"));
 
 		return CmdRegisterIf::ReturnCode::NORMAL;
 	}
 
-	TPT_TRACE(TRACE_ABN, "Command name %s already exists!", cmdName.c_str());
+	TPT_TRACE(TRACE_ABN, SSTR("Command name \"", cmdName, "\" already exists!"));
 	return rc;
 }
 
@@ -129,33 +124,33 @@ CmdRegisterIf::ReturnCode CmdRegisterImpl::deregisterCmdHandler(const std::strin
 
 		if(!itc_send(&req, m_clidMboxId, ITC_MY_MBOX_ID, NULL))
 		{
-			TPT_TRACE(TRACE_ERROR, "Failed to send CMDIF_DEREG_CMD_REQUEST to clid for cmdName = %s!", cmdName.c_str());
+			TPT_TRACE(TRACE_ERROR, SSTR("Failed to send CMDIF_DEREG_CMD_REQUEST to clid for cmdName = \"", cmdName, "\""));
 			return CmdRegisterIf::ReturnCode::INTERNAL_ERROR;
 		}
 
-		TPT_TRACE(TRACE_INFO, "Send CMDIF_DEREG_CMD_REQUEST to clid successfully!");
+		TPT_TRACE(TRACE_INFO, SSTR("Send CMDIF_DEREG_CMD_REQUEST to clid successfully!"));
 
 		return CmdRegisterIf::ReturnCode::NORMAL;
 	}
 
-	TPT_TRACE(TRACE_ABN, "Command name %s not found!", cmdName.c_str());
+	TPT_TRACE(TRACE_ABN, SSTR("Command name \"", cmdName, "\" not found!"));
 	return rc;
 }
 
 void CmdRegisterImpl::invokeCmd(const std::shared_ptr<CmdIf::V1::CmdJobIf>& job, const CmdRegisterIf::CmdInvoker& cmdHandler)
 {
-	TPT_TRACE(TRACE_INFO, "Invoking cmd handler: %s", job->getCmdName().c_str());
+	TPT_TRACE(TRACE_INFO, SSTR("Invoking cmd handler: \"", job->getCmdName(), "\""));
 	cmdHandler(job);
 }
 
 void CmdRegisterImpl::init()
 {
-	TPT_TRACE(TRACE_INFO, "CmdRegisterIf initializing...");
+	TPT_TRACE(TRACE_INFO, SSTR("CmdRegisterIf initializing..."));
 
 	m_clidMboxId = itc_locate_sync(1000, m_clidMboxName.c_str(), true, NULL, NULL);
 	if(m_clidMboxId == ITC_NO_MBOX_ID)
 	{
-		TPT_TRACE(TRACE_ERROR, "Failed to locate %s!", m_clidMboxName.c_str());
+		TPT_TRACE(TRACE_ERROR, SSTR("Failed to locate \"", m_clidMboxName, "\""));
 		return;
 	}
 
@@ -189,7 +184,7 @@ void CmdRegisterImpl::handleExeCmdRequest(const std::shared_ptr<union itc_msg>& 
 	}
 
 	printArgs << "\"";
-	TPT_TRACE(TRACE_INFO, "Received execute command request from clid for cmdName %s, with args %s", msg->cmdIfExeCmdRequest.cmd_name, printArgs.str().c_str());
+	TPT_TRACE(TRACE_INFO, SSTR("Received execute command request from clid for cmdName \"", std::string(msg->cmdIfExeCmdRequest.cmd_name), "\", with args \"",  printArgs.str(), "\""));
 
 	auto job = std::make_shared<CmdIf::V1::CmdJobImpl>(msg->cmdIfExeCmdRequest.cmd_name, msg->cmdIfExeCmdRequest.job_id, argsList, m_clidMboxId);
 
@@ -200,7 +195,7 @@ void CmdRegisterImpl::handleExeCmdRequest(const std::shared_ptr<union itc_msg>& 
 		iter->second(job);
 	} else
 	{
-		TPT_TRACE(TRACE_ERROR, "No registered cmdHandler found for cmdName %s", job->getCmdName().c_str());
+		TPT_TRACE(TRACE_ERROR, SSTR("No registered cmdHandler found for cmdName \"", job->getCmdName(), "\""));
 	}
 }
 

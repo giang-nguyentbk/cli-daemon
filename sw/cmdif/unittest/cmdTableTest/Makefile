@@ -16,6 +16,7 @@ INCLUDE_DIR 	:= \
 		-I$(ROOT_DIR)/sw/cmdif/if \
 		-I$(ROOT_DIR)/sw/cmdif/inc \
 		-I$(ROOT_DIR)/sw/cmdif/unittest/cmdTableTest \
+		-I$(ROOT_DIR)/sw/common/if \
 		-I$(SDK_INC_DIR)
 
 SOURCE1 	:= $(ROOT_DIR)/sw/cmdif/src/cmdTableImpl.cc

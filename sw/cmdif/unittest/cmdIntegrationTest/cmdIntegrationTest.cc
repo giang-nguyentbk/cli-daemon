@@ -9,14 +9,16 @@
 #include <itcPubSubIf.h>
 #include <eventLoopIf.h>
 #include <traceIf.h>
-#include <stringToIntegralType.h>
+#include <stringUtils.h>
 
+#include "cli-daemon-tpt-provider.h"
 #include "cmdJobIf.h"
 #include "cmdRegisterIf.h"
 #include "cmdTableIf.h"
 #include "cmdTypesIf.h"
 
 using namespace CmdIf::V1;
+using namespace CommonUtils::V1::StringUtils;
 
 CmdTypesIf::CmdResultCode handleCmd1(const std::vector<std::string>& arguments, std::ostringstream& outputStream);
 CmdTypesIf::CmdResultCode handleCmdHelp(const std::vector<std::string>& arguments, std::ostringstream& outputStream);
@@ -53,14 +55,14 @@ int main()
 {
 	if(itc_init(3, ITC_MALLOC, 0) == false)
 	{
-		TPT_TRACE(TRACE_ERROR, "Failed to itc_init() by cmdIntegrationTest!");
+		TPT_TRACE(TRACE_ERROR, SSTR("Failed to itc_init() by cmdIntegrationTest!"));
 		return false;
 	}
 
 	m_cmdIntegrationTestMboxId = itc_create_mailbox("cmdTestMailbox", ITC_NO_NAMESPACE);
 	if(m_cmdIntegrationTestMboxId == ITC_NO_MBOX_ID)
 	{
-		TPT_TRACE(TRACE_ERROR, "Failed to create mailbox %s", "cmdTestMailbox");
+		TPT_TRACE(TRACE_ERROR, SSTR("Failed to create mailbox \"cmdTestMailbox\"!"));
 		return false;
 	}
 
@@ -77,7 +79,7 @@ int main()
 
 CmdTypesIf::CmdResultCode handleCmd1(const std::vector<std::string>& arguments, std::ostringstream& outputStream)
 {
-	TPT_TRACE(TRACE_INFO, "CMD: Handle cmd1!");
+	TPT_TRACE(TRACE_INFO, SSTR("CMD: Handle cmd1!"));
 
 	if(arguments.size() != 2 && arguments.size() != 3)
 	{
@@ -106,7 +108,7 @@ CmdTypesIf::CmdResultCode handleCmd1(const std::vector<std::string>& arguments, 
 	auto job = m_currentJob;
 	if(job == nullptr)
 	{
-		TPT_TRACE(TRACE_ERROR, "Current job m_currentJob is nullptr!\n");
+		TPT_TRACE(TRACE_ERROR, SSTR("Current job m_currentJob is nullptr!\n"));
 		return CmdTypesIf::CmdResultCode::CMD_RET_FAIL;
 	}
 
@@ -135,7 +137,7 @@ CmdTypesIf::CmdResultCode handleCmd1(const std::vector<std::string>& arguments, 
 
 CmdTypesIf::CmdResultCode handleCmdHelp(const std::vector<std::string>& arguments, std::ostringstream& outputStream)
 {
-	TPT_TRACE(TRACE_INFO, "CMD: Handle printing help!");
+	TPT_TRACE(TRACE_INFO, SSTR("CMD: Handle printing help!"));
 
 	if(arguments[0] == ABC_CMD)
 	{
@@ -143,7 +145,7 @@ CmdTypesIf::CmdResultCode handleCmdHelp(const std::vector<std::string>& argument
 	}
 	else
 	{
-		TPT_TRACE(TRACE_ERROR, "CMD: Invalid command name \"%s\"", arguments[0].c_str());
+		TPT_TRACE(TRACE_ERROR, SSTR("CMD: Invalid command name \"", arguments[0], "\""));
 		outputStream << "Invalid command name " << arguments[0] << "\n";
 	}
 

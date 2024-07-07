@@ -12,6 +12,7 @@
 #include <sys/timerfd.h>
 #include <search.h>
 #include <stddef.h>
+#include <termios.h>
 
 #include "tcp_proto.h"
 
@@ -37,6 +38,7 @@
 #define TCP_CLID_PORT		33333
 #define MAX_NUM_REMOTE_HOSTS	255
 #define CHECK_ALIVE_INTERVAL	15
+#define MAX_READLINE_LENGTH	1024
 #define CMD_EXECUTION_TIMEOUT	30 // seconds
 
 
@@ -80,6 +82,8 @@ struct history_cmd {
 struct history_cmd_queue {
 	struct history_cmd	*head;
 	struct history_cmd	*tail;
+
+	struct history_cmd	*search;
 };
 
 
@@ -89,10 +93,12 @@ struct history_cmd_queue {
 static volatile bool m_is_sigint = false;
 static bool m_is_exit = false;
 static bool m_is_connected = false;
-static char m_active_remote_ip[25] = "0.0.0.0";
+static char m_local_prompt[] = "local$ ";
+static char m_connected_prompt[35];
+static char m_active_remote_ip[20] = "0.0.0.0";
 static int m_active_fd = -1;
-static char m_buffer[256];
-static int m_buff_len = 0;
+static char m_buffer[MAX_READLINE_LENGTH];
+static size_t m_buff_len = 0;
 static char *m_args[MAX_NUM_ARGS];
 static int m_nr_args = 0;
 static struct local_cmd m_local_cmds[NUM_INTERNAL_CMDS];
@@ -106,6 +112,7 @@ static pthread_mutex_t m_udp_thread_mtx;
 static void *m_remote_host_tree;
 static struct history_cmd_queue m_hist_cmd_queue;
 static uint16_t m_num_hist_cmd = 0;
+static struct termios old_term_settings, current_term_settings;
 
 
 
@@ -114,7 +121,7 @@ static uint16_t m_num_hist_cmd = 0;
 *******************************************************************************/
 static void shell_init(void);
 static void shell_sig_handler(int signo);
-static bool read_input_cmd(char *buff);
+static bool read_input_cmd(char *line, size_t max_len);
 static int get_token(const char *str, char *token);
 static int get_args(char *cmd, char *args[]);
 static int is_local_cmd(char *str);
@@ -144,6 +151,12 @@ static bool send_exe_cmd_request(int sockfd);
 static bool receive_exe_cmd_reply(int sockfd);
 static bool handle_receive_exe_cmd_reply(int sockfd, struct ethtcp_header *header);
 
+/* Initialize new terminal i/o settings */
+void initTermios(void);
+/* Restore old terminal i/o settings */
+void resetTermios(void);
+
+
 static bool local_help(char **args);
 static bool local_exit(char **args);
 static bool local_history(char **args);
@@ -170,6 +183,7 @@ int main(int argc, char* argv[])
 
 	m_hist_cmd_queue.head = NULL;
 	m_hist_cmd_queue.tail = NULL;
+	m_hist_cmd_queue.search = NULL;
 
 	setup_udp_server();
 	setup_udp_thread();
@@ -177,19 +191,21 @@ int main(int argc, char* argv[])
 	printf("Starting new shell...\n");
 	printf("\n");
 
+	initTermios();
+
 	int index = 0;
 	while(!m_is_exit)
 	{
 		if(m_is_connected)
 		{
-			printf("%s:%hu$ ", m_active_remote_ip, TCP_CLID_PORT);
+			printf("%s", m_connected_prompt);
 		} else
 		{
-			printf("local$ ");
+			printf("%s", m_local_prompt);
 		}
 
 		m_buff_len = 0;
-		bool ret = read_input_cmd(m_buffer);
+		bool ret = read_input_cmd(m_buffer, MAX_READLINE_LENGTH);
 		if(!ret)
 		{
 			exit(EXIT_FAILURE);
@@ -253,6 +269,8 @@ int main(int argc, char* argv[])
 
 	tdestroy(m_remote_cmd_tree, do_nothing);
 
+	resetTermios();
+
 	exit(EXIT_SUCCESS);
 }
 
@@ -279,38 +297,368 @@ static void shell_sig_handler(int signo)
 	// printf("\nCalling shell_sig_handler...\n");
 }
 
-static bool read_input_cmd(char *buff)
+static bool read_input_cmd(char *line, size_t max_len)
 {
-	if (fgets(buff, 256, stdin) != NULL)
-	{
-		m_buff_len = strlen(buff);
-		if (m_buff_len > 0 && buff[m_buff_len-1] == '\n') {
-			buff[--m_buff_len] = '\0';
-		}
-		// printf("You entered %d characters: \"%s\"\n", m_buff_len, buff);
+	size_t i = 0;
+	line[0] = '\0';
 
-		if(m_buff_len > 0) 
+	char c;
+	char arrow_count = 0; // 27 -> 91 -> 65/66/67/68
+	char del_count = 0; // 51 -> 126
+	char home_end_count = 0; // 27 -> 72/70
+	bool is_reached_tail_head = false;
+
+	while((c = getchar()))
+	{
+		if(i > max_len - 1)
 		{
-			add_new_cmd_to_history_queue(buff);
+			printf("\nLine is too long!\n");
+			break;
+		}
+
+		switch (c)
+		{
+		case 27: // Escape sequence character '^['
+			arrow_count = 1;
+			home_end_count = 1;
+			break;
+		case 91:
+			if(arrow_count == 1)
+			{
+				arrow_count = 2;
+			}
+			if(home_end_count == 1)
+			{
+				home_end_count = 2;
+			}
+			break;
+		case 65: // Up Arrow
+			if(arrow_count == 2)
+			{
+				if(m_hist_cmd_queue.search == NULL)
+				{
+					break;
+				}
+
+				// Clear current line
+				printf("\33[2K\r");
+				line[0] = '\0';
+				i = 0;
+
+				if(m_is_connected)
+				{
+					printf("%s", m_connected_prompt);
+				} else
+				{
+					printf("%s", m_local_prompt);
+				}
+
+				if(m_hist_cmd_queue.search == m_hist_cmd_queue.tail && is_reached_tail_head)
+				{
+					m_hist_cmd_queue.search = m_hist_cmd_queue.search->prev;
+				}
+
+				printf("%s", m_hist_cmd_queue.search->cmd);
+				strcat(line, m_hist_cmd_queue.search->cmd);
+				i += strlen(line);
+
+				if(m_hist_cmd_queue.search != m_hist_cmd_queue.head)
+				{
+					m_hist_cmd_queue.search = m_hist_cmd_queue.search->prev;
+					is_reached_tail_head = false;
+				} else
+				{
+					is_reached_tail_head = true;
+				}
+			}
+			break;
+		case 66: // Down Arrow
+			if(arrow_count == 2)
+			{
+				if(m_hist_cmd_queue.search == NULL)
+				{
+					break;
+				}
+
+				// Clear current line
+				printf("\33[2K\r");
+				line[0] = '\0';
+				i = 0;
+
+				if(m_is_connected)
+				{
+					printf("%s", m_connected_prompt);
+				} else
+				{
+					printf("%s", m_local_prompt);
+				}				
+
+				if(m_hist_cmd_queue.search == m_hist_cmd_queue.head && is_reached_tail_head)
+				{
+					m_hist_cmd_queue.search = m_hist_cmd_queue.search->next;
+					printf("%s", m_hist_cmd_queue.search->cmd);
+					strcat(line, m_hist_cmd_queue.search->cmd);
+					i += strlen(line);
+					m_hist_cmd_queue.search = m_hist_cmd_queue.search->next;
+					is_reached_tail_head = false;
+				} else if(m_hist_cmd_queue.search == m_hist_cmd_queue.tail && is_reached_tail_head)
+				{
+				} else
+				{
+					printf("%s", m_hist_cmd_queue.search->cmd);
+					strcat(line, m_hist_cmd_queue.search->cmd);
+					i += strlen(line);
+
+					if(m_hist_cmd_queue.search != m_hist_cmd_queue.tail)
+					{
+						m_hist_cmd_queue.search = m_hist_cmd_queue.search->next;
+						is_reached_tail_head = false;
+					} else
+					{
+						is_reached_tail_head = true;
+					}
+				}				
+			}
+			break;
+		case 67: // Right Arrow
+			if(arrow_count == 2)
+			{
+				// printf("GET RIGHT ARROW!");
+				if(i < strlen(line))
+				{
+					printf("\033[1C");
+					++i;
+				}
+				
+			}
+			break;
+		case 68: // Left Arrow
+			if(arrow_count == 2)
+			{
+				// printf("GET LEFT ARROW!");
+				if(i > 0)
+				{
+					printf("\b");
+					--i;
+				}
+			}
+			break;
+		case 8: // Backspace
+			// printf("GET BACKSPACE!");
+			if(i > 0)
+			{
+				// Handle our line[]
+				--i;
+				line[i] = '\0';
+				strcat(line, line + strlen(line) + 1);
+
+				// Clear current line and printf new line
+				printf("\33[2K\r");
+
+				size_t prompt_len = 0;
+				if(m_is_connected)
+				{
+					printf("%s", m_connected_prompt);
+					prompt_len = strlen(m_connected_prompt);
+				} else
+				{
+					printf("%s", m_local_prompt);
+					prompt_len = strlen(m_local_prompt);
+				}
+
+				printf("%s", line);
+
+				// Move to beginning of the line
+				printf("\r");
+				// Move right i characters
+				for(size_t iter = 0; iter < (prompt_len + i); ++iter)
+				{
+					printf("\033[1C");
+				}
+			}
+			break;
+		case 51:
+			del_count = 1;
+			break;
+		case 126: // Del
+			if(del_count == 1)
+			{
+				if(i < strlen(line))
+				{
+					// Handle our line[]
+					line[i] = '\0';
+					strcat(line, line + strlen(line) + 1);
+
+					// Clear current line and printf new line
+					printf("\33[2K\r");
+
+					size_t prompt_len = 0;
+					if(m_is_connected)
+					{
+						printf("%s", m_connected_prompt);
+						prompt_len = strlen(m_connected_prompt);
+					} else
+					{
+						printf("%s", m_local_prompt);
+						prompt_len = strlen(m_local_prompt);
+					}
+
+					printf("%s", line);
+
+					// Move to beginning of the line
+					printf("\r");
+					// Move right i characters
+					for(size_t iter = 0; iter < (prompt_len + i); ++iter)
+					{
+						printf("\033[1C");
+					}
+				}
+			}
+			break;
+		case 10: // Enter
+			// Receive command and execute it
+			// printf("\nExecuting command above!");
+			m_hist_cmd_queue.search = m_hist_cmd_queue.tail;
+			printf("\n");
+			break;
+		case 32: // Space
+			// Save string from current position to the end of line
+			char latter[MAX_READLINE_LENGTH];
+			strcpy(latter, line + i);
+			line[i] = '\0';
+			strcat(line, " ");
+			strcat(line, latter);
+			++i;
+
+			// Clear current line and printf new line
+			printf("\33[2K\r");
+
+			size_t prompt_len = 0;
+			if(m_is_connected)
+			{
+				printf("%s", m_connected_prompt);
+				prompt_len = strlen(m_connected_prompt);
+			} else
+			{
+				printf("%s", m_local_prompt);
+				prompt_len = strlen(m_local_prompt);
+			}
+
+			printf("%s", line);
+
+			// Move to beginning of the line
+			printf("\r");
+			// Move right i characters
+			for(size_t iter = 0; iter < (prompt_len + i); ++iter)
+			{
+				printf("\033[1C");
+			}
+			break;
+		case 18: // Ctrl-R	
+			break;
+		case 72: // Home
+			if(home_end_count == 2)
+			{
+				for(size_t iter = 0; iter < i; ++iter)
+				{
+					printf("\b");
+				}
+
+				i = 0;
+			}
+			break;
+		case 70: // End
+			if(home_end_count == 2)
+			{
+				for(size_t iter = i; iter < strlen(line); ++iter)
+				{
+					printf("\033[1C");
+				}
+
+				i = strlen(line);
+			}
+			break;
+
+		default:
+			break;
+		}
+
+		if(c == 10)
+		{
+			break;
+		}
+
+		if(c == EOF)
+		{
+			if(m_is_sigint)
+			{
+				// printf("Received Ctrl-C!");
+				m_is_sigint = false;
+				m_buff_len = 0;
+				line[0] = '\0';
+				printf ("\n");
+			}
+
+			return true;
+		}
+
+		if(c == 32 || c == 8)
+		{
+			continue;
+		}
+
+		if(arrow_count == 0 && del_count == 0 && home_end_count == 0 && c >= 33 && c <= 125)
+		{
+			// Save string from current position to the end of line
+			char latter[MAX_READLINE_LENGTH];
+			strcpy(latter, line + i);
+			line[i] = c;
+			line[i + 1] = '\0';
+			strcat(line, latter);
+			++i;
+
+			// Clear current line and printf new line
+			printf("\33[2K\r");
+
+			size_t prompt_len = 0;
+			if(m_is_connected)
+			{
+				printf("%s", m_connected_prompt);
+				prompt_len = strlen(m_connected_prompt);
+			} else
+			{
+				printf("%s", m_local_prompt);
+				prompt_len = strlen(m_local_prompt);
+			}
+
+			printf("%s", line);
+
+			// Move to beginning of the line
+			printf("\r");
+			// Move right i characters
+			for(size_t iter = 0; iter < (prompt_len + i); ++iter)
+			{
+				printf("\033[1C");
+			}
+		}
+		
+		if(c != 27 && c != 91)
+		{
+			arrow_count = 0;
+			home_end_count = 0;
+		}
+
+		if(c != 51)
+		{
+			del_count = 0;
 		}
 	}
-	else
-	{
-		if(!m_is_sigint)
-		{
-			printf("\nError reading from stdin!\n");
-			return false;
-		} else
-		{
-			// printf("\nReceived Ctrl C, just return to the shell!\n");
-			m_is_sigint = false;
-			m_buff_len = 0;
-			printf ("\n");
-		}
-	}
 
-	// Implement up/down arrows to show historical commands:
-	// Read more at https://stackoverflow.com/questions/7469139/what-is-the-equivalent-to-getch-getche-in-linux
+	m_buff_len = strlen(line);
+	if(m_buff_len > 0) 
+	{
+		add_new_cmd_to_history_queue(line);
+	}
 
 	return true;
 }
@@ -691,8 +1039,10 @@ static bool local_connect(char **args)
 
 	connect_to_remote_host_via_ipaddr(ipaddr);
 
-	printf("\n");
 	m_is_connected = true;
+	snprintf(m_connected_prompt, 35, "%s:%hu$ ", m_active_remote_ip, TCP_CLID_PORT);
+
+	printf("\n");
 	return true;
 }
 
@@ -1053,6 +1403,8 @@ static void add_new_cmd_to_history_queue(char *cmd)
 		m_hist_cmd_queue.tail = new_cmd;
 		m_num_hist_cmd++;
 	}
+
+	m_hist_cmd_queue.search = m_hist_cmd_queue.tail;
 }
 
 static void destroy_history_queue(struct history_cmd_queue *hist_queue)
@@ -1435,7 +1787,16 @@ static bool handle_receive_exe_cmd_reply(int sockfd, struct ethtcp_header *heade
 	return true;
 }
 
+void initTermios(void)
+{
+	tcgetattr(0, &old_term_settings); /* grab old terminal i/o settings */
+	current_term_settings = old_term_settings; /* make new settings same as old settings */
+	current_term_settings.c_lflag &= ~(ICANON | ECHO | ECHOE); /* disable buffered i/o */
+	tcsetattr(0, TCSANOW, &current_term_settings); /* use these new terminal i/o settings now */
+}
 
-
-
+void resetTermios(void)
+{
+	tcsetattr(0, TCSANOW, &old_term_settings);
+}
 

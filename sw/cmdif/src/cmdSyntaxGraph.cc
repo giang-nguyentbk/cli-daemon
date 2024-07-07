@@ -5,10 +5,15 @@
 #include <map>
 #include <functional>
 #include <sstream>
+#include <cstdio>
 
 #include <traceIf.h>
+#include <stringUtils.h>
 
+#include "cli-daemon-tpt-provider.h"
 #include "cmdSyntaxGraph.h"
+
+using namespace CommonUtils::V1::StringUtils;
 
 namespace CmdIf
 {
@@ -28,12 +33,12 @@ std::shared_ptr<GraphNode> GraphNode::createAndAddNewSubnodeIfNotExist(const std
 	std::shared_ptr<GraphNode> existingNode = findSubnode(nodeName);
 	if(existingNode)
 	{
-		// TPT_TRACE(TRACE_DEBUG, "Node \"%s\" already exists, return!", nodeName.c_str());
+		// TPT_TRACE(TRACE_DEBUG, SSTR("Node \"", nodeName, "\" already exists, return!"));
 		return existingNode;
 	}
 
 	/* If not, create one and add the created subnode to the current node if not exist */
-	// TPT_TRACE(TRACE_DEBUG, "Node \"%s\" not exists, create a new one!", nodeName.c_str());
+	// TPT_TRACE(TRACE_DEBUG, SSTR("Node \"", nodeName, "\" not exists, create a new one!"));
 	std::shared_ptr<GraphNode> newNode = std::make_shared<GraphNode>(nodeName);
 	return addCreatedSubnodeIfNotExist(newNode);
 }
@@ -45,7 +50,7 @@ std::shared_ptr<GraphNode> GraphNode::addCreatedSubnodeIfNotExist(std::shared_pt
 		return createdSubnode;
 	}
 
-	// TPT_TRACE(TRACE_DEBUG, "Add a created node \"%s\" to node \"%s\"", (createdSubnode->m_name).c_str(), m_name.c_str());
+	// TPT_TRACE(TRACE_DEBUG, SSTR("Add a created node \"", createdSubnode->m_name, "\" to node \"", m_name, "\""));
 	m_subNodeList.push_back(createdSubnode);
 	return createdSubnode;
 }
@@ -60,7 +65,7 @@ std::shared_ptr<GraphNode> GraphNode::findSubnode(const std::string& nodeName)
 		}
 	}
 
-	// TPT_TRACE(TRACE_DEBUG, "Could not find subnode \"%s\"", nodeName.c_str());
+	// TPT_TRACE(TRACE_DEBUG, SSTR("Could not find subnode \"", nodeName, "\""));
 	return nullptr;
 }
 
@@ -145,7 +150,7 @@ char CmdSyntaxGraph::splitOutSyntax(const char*& syntax, GraphNodeList& lastNode
 		{
 			GraphNodeList newLastNodes; // All nodes in this collection will be the new last nodes
 
-			// TPT_TRACE(TRACE_DEBUG, "Received token \"%s\", analyzing inside it!", c == '{' ? "{" : "[");
+			// TPT_TRACE(TRACE_DEBUG, SSTR("Received token \"", c == '{' ? "{" : "[", "\", analyzing inside it!"));
 			/* If it's [ ] instead of { }, nodes inside [ ] will be considered as optional, so included in the current last node list */
 			if(c == '[')
 			{
@@ -158,7 +163,7 @@ char CmdSyntaxGraph::splitOutSyntax(const char*& syntax, GraphNodeList& lastNode
 			{
 				// Make a copy of the current lastNodes to provide into a recursive call of splitOutSyntax()
 				// to process nodes inside { } or [ ]
-				// TPT_TRACE(TRACE_DEBUG, "Received token \"%s\", check if continue receiving!", c == '|' ? "|" : "nothing");
+				// TPT_TRACE(TRACE_DEBUG, SSTR("Received token \"", c == '|' ? "|" : "nothing", "\", check if continue receiving!"));
 				GraphNodeList copiedLastNodes = lastNodes;
 
 				// Process nodes inside { } or [ ] one by one which are separated out by '|'
@@ -179,7 +184,7 @@ char CmdSyntaxGraph::splitOutSyntax(const char*& syntax, GraphNodeList& lastNode
 						newLastNodes.push_back(node);
 					} else
 					{
-						TPT_TRACE(TRACE_ABN, "Ignore node \"%s\" which is already exist, please recheck syntax!", (node->m_name).c_str());
+						TPT_TRACE(TRACE_ABN, SSTR("Ignore node \"", node->m_name, "\" which is already exist, please recheck syntax!"));
 					}
 				}
 
@@ -191,7 +196,7 @@ char CmdSyntaxGraph::splitOutSyntax(const char*& syntax, GraphNodeList& lastNode
 		}
 		else if(c == '|' || c == '}' || c == ']')
 		{
-			// TPT_TRACE(TRACE_INFO, "Received token \"%s\", continue analyzing syntax!", c == '|' ? "|" : c == '}' ? "}" : "]" );
+			// TPT_TRACE(TRACE_INFO, SSTR("Received token \"", c == '|' ? "|" : c == '}' ? "}" : "]", "\", continue analyzing syntax!"));
 			return c;
 		}
 		else
@@ -201,21 +206,21 @@ char CmdSyntaxGraph::splitOutSyntax(const char*& syntax, GraphNodeList& lastNode
 				/* No need to add a node that has a same name with cmdName, and also is the first argument which should have been created by addSyntax()
 				   Or by some weird situation, two consecutive arguments have a same name, ignore the latter
 				   INFO TRACE: is needed here to print out lastNodes[0]->m_name and token */
-				// TPT_TRACE(TRACE_DEBUG, "Token: \"%s\" (to be skipped)", token.c_str());
+				// TPT_TRACE(TRACE_DEBUG, SSTR("Token: \"", token, "\" (to be skipped)"));
 				continue;
 			}
 			else
 			{
 				/* A single successive node which should be linked to all current last nodes */
-				// TPT_TRACE(TRACE_DEBUG, "Token: \"%s\" (append to lastnodes below)", token.c_str());
+				// TPT_TRACE(TRACE_DEBUG, SSTR("Token: \"", token, "\" (append to lastnodes below)"));
 				// printGraphNodeList(lastNodes); // DEBUG ONLY
 				appendNewNodeToLastNodes(token, lastNodes);
 			}
 		}
 	}
 
-	TPT_TRACE(TRACE_INFO, "Done splitOutSyntax()!");
-	// TPT_TRACE(TRACE_DEBUG, "Last nodes below will be attached with cmdHandler!");
+	TPT_TRACE(TRACE_INFO, SSTR("Done splitOutSyntax()!"));
+	// TPT_TRACE(TRACE_DEBUG, SSTR("Last nodes below will be attached with cmdHandler!"));
 	// printGraphNodeList(lastNodes); // DEBUG ONLY
 	return '\0'; // Indicate that we have done spliting out a syntax
 }
@@ -253,7 +258,7 @@ bool CmdSyntaxGraph::validateBrackets(const std::string& syntax, char openBracke
 
 	if(checkBrackets)
 	{
-		TPT_TRACE(TRACE_ERROR, "Syntax \"%s\" has unbalanced brackets %s!", syntax.c_str(), openBracket == '{' ? "{}" : openBracket == '[' ? "[]" : "<>");
+		TPT_TRACE(TRACE_ERROR, SSTR("Syntax \"", syntax, "\" has unbalanced brackets ", openBracket == '{' ? "{}" : openBracket == '[' ? "[]" : "<>", "!"));
 		return false;
 	}
 
@@ -271,7 +276,7 @@ void CmdSyntaxGraph::addSyntax(std::shared_ptr<GraphNode>& firstNode, const std:
 	const char* s = syntax.c_str();
 	if(splitOutSyntax(s, lastNodes) != '\0')
 	{
-		TPT_TRACE(TRACE_ERROR, "Failed to split out syntax for cmdName \"%s\"", (firstNode->m_name).c_str());
+		TPT_TRACE(TRACE_ERROR, SSTR("Failed to split out syntax for cmdName \"", firstNode->m_name, "\""));
 		return;
 	}
 
@@ -280,13 +285,14 @@ void CmdSyntaxGraph::addSyntax(std::shared_ptr<GraphNode>& firstNode, const std:
 	{
 		if(node->m_handler.func == nullptr && node->m_handler.funcName == "")
 		{
-			TPT_TRACE(TRACE_INFO, "Attaching cmdHandler \"%s\" to node \"%s\", first time!", (cmdHandler.funcName).c_str(), (node->m_name).c_str());
+			TPT_TRACE(TRACE_INFO, SSTR("Attaching cmdHandler \"", cmdHandler.funcName, "\" to node \"", node->m_name, "\", first time!"));
 		} else if(node->m_handler.funcName != cmdHandler.funcName)
 		{
-			TPT_TRACE(TRACE_ABN, "Overwrite existing cmdHandler on node \"%s\", old cmdHandler \"%s\", new cmdHandler \"%s\"", (node->m_name).c_str(), (node->m_handler.funcName).c_str(), (cmdHandler.funcName).c_str());
+			TPT_TRACE(TRACE_ABN, SSTR("Overwrite existing cmdHandler on node \"", node->m_name, "\", old cmdHandler \"", \
+			node->m_handler.funcName, "\", new cmdHandler \"", cmdHandler.funcName, "\""));
 		} else
 		{
-			TPT_TRACE(TRACE_INFO, "This node \"%s\" already holds cmdHandler \"%s\", will not re-assign!", (node->m_name).c_str(), (node->m_handler.funcName).c_str());
+			TPT_TRACE(TRACE_INFO, SSTR("This node \"", node->m_name, "\" already holds cmdHandler \"", node->m_handler.funcName, "\", will not re-assign!"));
 			continue;
 		}
 
@@ -328,7 +334,7 @@ std::shared_ptr<GraphNode> CmdSyntaxGraph::evaluateCommandArguments(std::shared_
 		if(numSubnodes == 0)
 		{
 			// No matching subnodes found in this potential path: skip all remaining arguments
-			TPT_TRACE(TRACE_ABN, "No matching node found, return current node \"%s\"!", (currentNode->m_name).c_str());
+			TPT_TRACE(TRACE_ABN, SSTR("No matching node found, return current node \"", currentNode->m_name, "\"!"));
 			return currentNode;
 		}
 		else if(numSubnodes == 1)
@@ -337,7 +343,7 @@ std::shared_ptr<GraphNode> CmdSyntaxGraph::evaluateCommandArguments(std::shared_
 			if(subnodes[0]->m_handler.func && numArgs == i + 1)
 			{
 				// check if it's the last one in the path which should have the cmdHandler
-				TPT_TRACE(TRACE_INFO, "Found cmdHandler on node \"%s\"!", (subnodes[0]->m_name).c_str());
+				TPT_TRACE(TRACE_INFO, SSTR("Found cmdHandler on node \"", subnodes[0]->m_name, "\"!"));
 				return subnodes[0]; // cmdHandler found, finish!
 			}
 
@@ -358,7 +364,7 @@ std::shared_ptr<GraphNode> CmdSyntaxGraph::evaluateCommandArguments(std::shared_
 				std::shared_ptr<GraphNode> sn = evaluateCommandArguments(subnode, nullptr, numArgs - (i + 1), args + (i + 1)); // First version
 				if(sn && sn->m_handler.func)
 				{
-					TPT_TRACE(TRACE_INFO, "Found cmdHandler on deeper node \"%s\"!", (sn->m_name).c_str());
+					TPT_TRACE(TRACE_INFO, SSTR("Found cmdHandler on deeper node \"", sn->m_name, "\"!"));
 					return sn; // cmdHandler found, finish!
 				}
 			}
@@ -369,13 +375,13 @@ std::shared_ptr<GraphNode> CmdSyntaxGraph::evaluateCommandArguments(std::shared_
 				*validArgs << args[i] << " ";
 			}
 			
-			TPT_TRACE(TRACE_ABN, "Could not find cmdHandler, return default node \"%s\"!", (subnodes[0]->m_name).c_str());
+			TPT_TRACE(TRACE_ABN, SSTR("Could not find cmdHandler, return default node \"", subnodes[0]->m_name, "\"!"));
 			return subnodes[0]; // If failed, by default choose the first subnode of subnodes to start printing a correct syntax
 		}
 	}
 
 	// All actual arguments have been checked and just found one path that match those arguments
-	TPT_TRACE(TRACE_INFO, "Return with node \"%s\"!", (currentNode->m_name).c_str());
+	TPT_TRACE(TRACE_INFO, SSTR("Return with node \"", currentNode->m_name, "\"!"));
 	return currentNode;
 }
 
@@ -518,10 +524,10 @@ void CmdSyntaxGraph::printNextPossibleArguments(std::shared_ptr<GraphNode> curre
 
 void CmdSyntaxGraph::printGraphNodeList(const GraphNodeList& list)
 {
-	TPT_TRACE(TRACE_INFO, "This GraphNodeList has %lu nodes!", list.size());
+	TPT_TRACE(TRACE_INFO, SSTR("This GraphNodeList has ", list.size(), " nodes!"));
 	for(const auto& node : list)
 	{
-		TPT_TRACE(TRACE_INFO, "Node: \"%s\"", (node->m_name).c_str());
+		TPT_TRACE(TRACE_INFO, SSTR("Node: \"", node->m_name, "\""));
 	}
 }
 

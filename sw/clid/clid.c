@@ -17,6 +17,7 @@
 #include <itc.h>
 #include <traceIf.h>
 
+#include "cli-daemon-tpt-provider.h"
 #include "tcp_proto.h"
 #include "cmdProto.h"
 

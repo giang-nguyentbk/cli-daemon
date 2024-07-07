@@ -4,11 +4,14 @@
 
 #include <itc.h>
 #include <traceIf.h>
+#include <stringUtils.h>
 
+#include "cli-daemon-tpt-provider.h"
 #include "cmdJobImpl.h"
 #include "cmdTypesIf.h"
 #include "cmdProto.h"
 
+using namespace CommonUtils::V1::StringUtils;
 
 namespace CmdIf
 {
@@ -42,7 +45,7 @@ void CmdJobImpl::done(const CmdIf::V1::CmdTypesIf::CmdResultCode& rc)
 		result = CMDIF_RET_FAIL;
 	} else
 	{
-		TPT_TRACE(TRACE_ERROR, "Unknown CmdResultCode rc = %d!", rc);
+		TPT_TRACE(TRACE_ERROR, SSTR("Unknown CmdResultCode rc = ", (char)rc));
 		return;
 	}
 
@@ -52,18 +55,18 @@ void CmdJobImpl::done(const CmdIf::V1::CmdTypesIf::CmdResultCode& rc)
 	rep->cmdIfExeCmdReply.result = result;
 	std::strcpy(rep->cmdIfExeCmdReply.output, m_output.str().c_str());
 
-	// TPT_TRACE(TRACE_DEBUG, "rep = 0x%016x", rep);
-	// TPT_TRACE(TRACE_DEBUG, "job_id = 0x%016x", &(rep->cmdIfExeCmdReply.job_id));
-	// TPT_TRACE(TRACE_DEBUG, "result = 0x%016x", &(rep->cmdIfExeCmdReply.result));
-	// TPT_TRACE(TRACE_DEBUG, "output = 0x%016x", (unsigned long long)(rep->cmdIfExeCmdReply.output));
+	// TPT_TRACE(TRACE_DEBUG, SSTR("rep = 0x", std::hex, rep));
+	// TPT_TRACE(TRACE_DEBUG, SSTR("job_id = 0x", std::hex, &(rep->cmdIfExeCmdReply.job_id)));
+	// TPT_TRACE(TRACE_DEBUG, SSTR("result = 0x", std::hex, &(rep->cmdIfExeCmdReply.result)));
+	// TPT_TRACE(TRACE_DEBUG, SSTR("output = 0x", std::hex, (unsigned long long)(rep->cmdIfExeCmdReply.output)));
 
 	if(!itc_send(&rep, m_clidMboxId, ITC_MY_MBOX_ID, NULL))
 	{
-		TPT_TRACE(TRACE_ERROR, "Failed to send CMDIF_EXE_CMD_REPLY to clid for cmdName = %s!", m_cmdName);
+		TPT_TRACE(TRACE_ERROR, SSTR("Failed to send CMDIF_EXE_CMD_REPLY to clid for cmdName = \"", m_cmdName, "\""));
 		return;
 	}
 
-	TPT_TRACE(TRACE_INFO, "Send CMDIF_EXE_CMD_REPLY to clid successfully!");
+	TPT_TRACE(TRACE_INFO, SSTR("Send CMDIF_EXE_CMD_REPLY to clid successfully!"));
 }
 
 } // V1

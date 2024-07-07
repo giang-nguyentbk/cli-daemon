@@ -82,7 +82,7 @@ void CmdSyntaxGraphTest::evaluateCommandArguments(std::shared_ptr<GraphNode> fir
 	std::shared_ptr<std::ostringstream> validArgs = std::make_shared<std::ostringstream>();
 	*validArgs << firstNode->m_name << " ";
 
-	std::cout << "Input: " << (firstNode->m_name).c_str() << std::endl;
+	std::cout << "Input: " << (firstNode->m_name) << std::endl;
 	std::cout << std::endl;
 
 	std::cout << "Output:" << std::endl;
@@ -101,7 +101,7 @@ void CmdSyntaxGraphTest::evaluateCommandArguments(std::shared_ptr<GraphNode> fir
 
 void CmdSyntaxGraphTest::printNextPossibleArgumentsTest(std::shared_ptr<GraphNode> currentNode)
 {
-	std::cout << "Input: " << (currentNode->m_name).c_str() << std::endl;
+	std::cout << "Input: " << (currentNode->m_name) << std::endl;
 	std::cout << std::endl;
 
 	std::ostringstream output;
