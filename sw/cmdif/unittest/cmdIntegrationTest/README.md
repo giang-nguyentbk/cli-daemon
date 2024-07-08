@@ -19,11 +19,11 @@ $ make
 $ make run
 
 # On terminal 4
-$[local]>> scan 
-$[local]>> connect --idx 1 
-$[192.168.x.y]>> abc --help 
-$[192.168.x.y]>> abc 
-$[192.168.x.y]>> abc 111 
-$[192.168.x.y]>> abc 111 222 
+$[local]$ scan 
+$[local]$ connect --idx 1 
+$[192.168.x.y:zzzz]$ abc --help 
+$[192.168.x.y:zzzz]$ abc 
+$[192.168.x.y:zzzz]$ abc 111 
+$[192.168.x.y:zzzz]$ abc 111 222 
 
 ```
