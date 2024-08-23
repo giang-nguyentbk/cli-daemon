@@ -154,7 +154,7 @@ void CmdRegisterImpl::init()
 		return;
 	}
 
-	IItcPubSub& itcPubSub = IItcPubSub::getInstance();
+	IItcPubSub& itcPubSub = IItcPubSub::getThreadLocalInstance();
 	itcPubSub.registerMsg(CMDIF_EXE_CMD_REQUEST, std::bind(&CmdRegisterImpl::handleExeCmdRequest, this, std::placeholders::_1));
 }
 

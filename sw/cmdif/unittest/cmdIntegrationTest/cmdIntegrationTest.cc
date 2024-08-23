@@ -68,11 +68,11 @@ int main()
 
 	std::atexit(atexit_handler);
 
-	UtilsFramework::ItcPubSub::V1::IItcPubSub::getInstance().addItcFd(itc_get_fd());
+	UtilsFramework::ItcPubSub::V1::IItcPubSub::getThreadLocalInstance().addItcFd(itc_get_fd());
 	CmdTableIf::getInstance().registerCmdTable(ABC_CMD, m_abcCmdDefinitions);
 	CmdRegisterIf::getInstance().registerCmdHandler(ABC_CMD, m_cmdDesc, std::bind(&abcCmdHandler, std::placeholders::_1));
 
-	UtilsFramework::EventLoop::V1::IEventLoop::getInstance().run();
+	UtilsFramework::EventLoop::V1::IEventLoop::getThreadLocalInstance().run();
 
 	return 0;
 }
@@ -174,7 +174,7 @@ void abcCmdHandler(const std::shared_ptr<CmdIf::V1::CmdJobIf>& job)
 
 void atexit_handler()
 {
-	UtilsFramework::EventLoop::V1::IEventLoop::getInstance().stop();
+	UtilsFramework::EventLoop::V1::IEventLoop::getThreadLocalInstance().stop();
 
 	itc_delete_mailbox(m_cmdIntegrationTestMboxId);
 	itc_exit();

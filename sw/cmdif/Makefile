@@ -26,7 +26,7 @@ $(OBJ_DIR)/%.o: $(CMDIF_SRC_DIR)/%.cc
 	@mkdir -p $(@D)
 	@cd $(<D)
 	@echo "  CXX \t\t $@"
-	@$(SELF_CXX) $(SELF_LDFLAGS) $(SELF_CFLAGS) $(CMDIF_CXXFLAGS) $(CMDIF_INCS) -o $@ $^
+	@$(SELF_CXX) $(SELF_LDFLAGS) $(SELF_CFLAGS) $(CMDIF_INCS) $^ -o $@
 
 $(LIB_DIR)/$(CMDIF_LIBAR): $(CMDIF_OBJS)
 	@mkdir -p $(@D)
@@ -38,12 +38,17 @@ $(LIB_DIR)/$(CMDIF_LIBSO): $(CMDIF_OBJS)
 	@mkdir -p $(@D)
 	@cd $(<D)
 	@echo "  CXXLD \t $@"
-	@$(SELF_CXX) $(SELF_SOFLAGS) -o $@ $^
+	@$(SELF_CXX) $(SELF_SOFLAGS) $^ $(CMDIF_CXXFLAGS) -o $@
 
 install-header-files-cmdif:
 	@mkdir -p $(INC_DIR)
-	@echo "  CPY \t\t $(CMDIF_DIR)/if"
+	@echo "  COPY \t\t $(CMDIF_DIR)/if"
 	@$(SELF_CPY) $(CMDIF_DIR)/if/*.h $(INC_DIR)
 
 clean-cmdif:
-	$(SELF_RMV) $(CMDIF_OBJS) $(LIB_DIR)/$(CMDIF_LIBAR) $(LIB_DIR)/$(CMDIF_LIBSO)
+	@echo "  RMV \t\t $(BIN_DIR)/cmdif"
+	@$(SELF_RMV) $(CMDIF_OBJS) $(LIB_DIR)/$(CMDIF_LIBAR) $(LIB_DIR)/$(CMDIF_LIBSO)
+	@$(SELF_RMV) $(INC_DIR)/cmdJobIf.h
+	@$(SELF_RMV) $(INC_DIR)/cmdRegisterIf.h
+	@$(SELF_RMV) $(INC_DIR)/cmdTableIf.h
+	@$(SELF_RMV) $(INC_DIR)/cmdTypesIf.h
